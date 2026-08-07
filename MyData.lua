@@ -24,8 +24,8 @@ local __LockTimers = {}
 local __ShutdownCalled = false
 
 export type MyDataValidationDummy = {
-	InsertPredicate: (self: MyDataValidationDummy, ThisData: any, Predicate: (ThisData: any) -> any) -> (),
-	RemovePredicate: (self: MyDataValidationDummy, PredicateIndex: number) -> (),
+	InsertPredicate: (self: MyDataValidationDummy, ThisData: any, Predicate: (ThisValue: any) -> any) -> any,
+	RemovePredicate: (self: MyDataValidationDummy, ThisData: any) -> any,
 }
 
 export type MyDataRecord = {
@@ -384,6 +384,20 @@ local function InPlayerData(meta, Key)
 		__SaveQueue[key] = nil
 	end
 	
+	local function is_data_valid(thisData, thisValue)
+		if not meta.ValidationEnabled then return true end
+		
+		local trackedValidations = meta._TrackedValidations and meta._TrackedValidations[record.key]
+		if not trackedValidations then return true end
+		
+		local predicate = trackedValidations[thisData]
+		if not predicate then
+			return true
+		end
+		
+		return not predicate(thisValue)
+	end
+	
 	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
 		dispatch(record.key, "OnDataLoading")
 
@@ -494,17 +508,34 @@ local function InPlayerData(meta, Key)
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
 		
+		local rejected = {}
+		
 		if SegmentIndex then
-			__DataCache[record.key][SegmentIndex] = Data
+			if is_data_valid(SegmentIndex, Data) then
+				__DataCache[record.key][SegmentIndex] = Data
+			else
+				table.insert(rejected, SegmentIndex)
+			end
 		else
-			__DataCache[record.key] = Data
+			for thisData, thisValue in pairs(Data) do
+				if is_data_valid(thisData, thisValue) then
+					__DataCache[record.key][thisData] = thisValue
+				else
+					table.insert(rejected, thisData)
+				end
+			end
+		end
+		
+		if #rejected > 0 then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
 		
 		if not __SaveQueue[record.key] then
 			__SaveQueue[record.key] = coroutine.create(create_saving_record)
 			
 			coroutine.resume(__SaveQueue[record.key], record.key, wal, data, backup)
-			
+						
 			local clone = deepclone(__DataCache[record.key])
 			dispatch(record.key, "OnDataCached", clone)
 		end
@@ -527,12 +558,41 @@ local function InPlayerData(meta, Key)
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
 		
-		local clone = table.clone(__DataCache[record.key])
+		local before = __DataCache[record.key]
+		local clone = deepclone(before)
 		local resultFunction = WritingFunction(clone)
 		
-		__DataCache[record.key] = resultFunction
-		local clone = deepclone(__DataCache[record.key])
+		if type(resultFunction) ~= "table" then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Write function must returns the/a table of param.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Write function isn't returning the table of param.")
+			
+			return false
+		end
 		
+		local rejected = {}
+		for thisData in pairs(before) do
+			if resultFunction[thisData] == nil then
+				if is_data_valid(thisData, nil) then
+					__DataCache[record.key][thisData] = nil
+				else
+					table.insert(rejected, thisData)
+				end
+			end
+		end
+		
+		for thisData, thisValue in pairs(resultFunction) do
+			if is_data_valid(thisData, thisValue) then
+				__DataCache[record.key][thisData] = thisValue
+			else
+				table.insert(rejected, thisData)
+			end
+		end
+		
+		if #rejected > 0 then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
+		end
+				
 		if not __SaveQueue[record.key] then
 			__SaveQueue[record.key] = coroutine.create(create_saving_record)
 			
@@ -652,10 +712,27 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
+		local rejected = {}
+
 		if SegmentIndex then
-			__DataCache[record.key][SegmentIndex] = Data
+			if is_data_valid(SegmentIndex, Data) then
+				__DataCache[record.key][SegmentIndex] = Data
+			else
+				table.insert(rejected, SegmentIndex)
+			end
 		else
-			__DataCache[record.key] = Data
+			for thisData, thisValue in pairs(Data) do
+				if is_data_valid(thisData, thisValue) then
+					__DataCache[record.key][thisData] = thisValue
+				else
+					table.insert(rejected, thisData)
+				end
+			end
+		end
+
+		if #rejected > 0 then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
 		
 		local clone = deepclone(__DataCache[record.key])
@@ -694,19 +771,49 @@ local function InPlayerData(meta, Key)
 		local wal = meta._CurrentWALDataStore
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
-		
-		local clone = table.clone(__DataCache[record.key])
-		local resultFunction = WritingFunction(clone)
-		
-		__DataCache[record.key] = resultFunction
-		local clone = deepclone(__DataCache[record.key])
 
-		local status, _, message = write_wal_optionally(wal, data, backup, record.key, resultFunction)
+		local before = __DataCache[record.key]
+		local clone = deepclone(before)
+		local resultFunction = WritingFunction(clone)
+
+		if type(resultFunction) ~= "table" then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Write function must returns the/a table of param.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Write function isn't returning the table of param.")
+
+			return false
+		end
+
+		local rejected = {}
+		for thisData in pairs(before) do
+			if resultFunction[thisData] == nil then
+				if is_data_valid(thisData, nil) then
+					__DataCache[record.key][thisData] = nil
+				else
+					table.insert(rejected, thisData)
+				end
+			end
+		end
+
+		for thisData, thisValue in pairs(resultFunction) do
+			if is_data_valid(thisData, thisValue) then
+				__DataCache[record.key][thisData] = thisValue
+			else
+				table.insert(rejected, thisData)
+			end
+		end
+
+		if #rejected > 0 then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
+		end
+		
+		local filteredData = __DataCache[record.key]
+		local status, _, message = write_wal_optionally(wal, data, backup, record.key, filteredData)
 		
 		if not status then
 			if message == "wal_disabled" then
-				write_data(data, record.key, resultFunction)
-				write_data(backup, record.key, resultFunction)
+				write_data(data, record.key, filteredData)
+				write_data(backup, record.key, filteredData)
 				
 				dispatch(record.key, "OnDataSaved", clone)
 
@@ -837,10 +944,27 @@ local function InPlayerData(meta, Key)
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
 		
+		local rejected = {}
+
 		if SegmentIndex then
-			__DataCache[record.key][SegmentIndex] = Data
+			if is_data_valid(SegmentIndex, Data) then
+				__DataCache[record.key][SegmentIndex] = Data
+			else
+				table.insert(rejected, SegmentIndex)
+			end
 		else
-			__DataCache[record.key] = Data
+			for thisData, thisValue in pairs(Data) do
+				if is_data_valid(thisData, thisValue) then
+					__DataCache[record.key][thisData] = thisValue
+				else
+					table.insert(rejected, thisData)
+				end
+			end
+		end
+
+		if #rejected > 0 then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
 		
 		if not __SaveQueue[record.key] then
@@ -905,8 +1029,20 @@ local function InPlayerData(meta, Key)
 	
 	function record:CreateValidation(ValidationFunction: (PredicateDummy: MyDataValidationDummy) -> any)
 		local dummyMethods = {}
+		local trackedValidations = meta._TrackedValidations[record.key] or {}
+		meta._TrackedValidations[record.key] = trackedValidations
 		
+		local currentData = deepclone(__DataCache[record.key])
 		
+		function dummyMethods:InsertPredicate(ThisData : any, Predicate: (ThisValue: any) -> any)
+			trackedValidations[ThisData] = Predicate
+		end
+		
+		function dummyMethods:RemovePredicate(ThisData : any)
+			trackedValidations[ThisData] = nil
+		end
+		
+		ValidationFunction(dummyMethods)
 	end
 	
 	function record:SmartCleanCache(Interval: number?)
@@ -928,6 +1064,7 @@ function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configuratio
 	self._DataPredicates = SDictionary.new("string", "table", {}) -- { [Key] = predicateFunction }
 		
 	self.Enabled = true
+	self.ValidationEnabled = true
 	self.RequestTimestampCooldown = 2
 	self.DefaultSavingDataCountdown = 30
 	self.DefaultDataLoadingAttempts = 5
