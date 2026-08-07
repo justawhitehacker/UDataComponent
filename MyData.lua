@@ -24,7 +24,7 @@ local __LockTimers = {}
 local __ShutdownCalled = false
 
 export type MyDataValidationDummy = {
-	InsertPredicate: (self: MyDataValidationDummy, Predicate: boolean) -> (),
+	InsertPredicate: (self: MyDataValidationDummy, ThisData: any, Predicate: (ThisData: any) -> any) -> (),
 	RemovePredicate: (self: MyDataValidationDummy, PredicateIndex: number) -> (),
 }
 
@@ -38,8 +38,8 @@ export type MyDataRecord = {
 	ForceSave: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
 	ForceWrite: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any) -> (),
 	SafeGet: (self: MyDataRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> any,
-	SafeSave: (self: MyDataRecord, Data: any, SegmentIndex: number?, SetAttempts: number?, YieldTime: number?) -> (),
-	SafeWrite: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any, LoadAttempts: number?, SetAttempts: number?, YieldTime: number?) -> (),
+	SafeSave: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
+	SafeWrite: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any) -> (),
 	AcquireLockSession: (self: MyDataRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, number), 
 	ReleaseLockSession: (self: MyDataRecord, OwnerIdentity: string) -> (),
 	IsSessionLocked: (self: MyDataRecord, OwnerIdentity: string) -> boolean,
@@ -131,6 +131,19 @@ local function InPlayerData(meta, Key)
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's callback error happened, reason: " .. tostring(err))
 		end
 	end
+	
+	local function deepclone(tab)
+		if typeof(tab) ~= "table" then
+			return tab
+		end		
+		local newTab = {}
+		
+		for k, v in pairs(tab) do
+			newTab[k] = deepclone(v)
+		end
+		
+		return newTab
+	end
 
 	local function match_key(key : string, strid : string)
 		key = tostring(key)
@@ -216,7 +229,8 @@ local function InPlayerData(meta, Key)
 			return false, nil, "write_data_failed"
 		end
 		
-		dispatch(record.key, "OnDataSaved", currentData)
+		local clone = deepclone(currentData)
+		dispatch(record.key, "OnDataSaved", clone)
 		return true, dataSuccess, "write_data_success"
 	end
 	
@@ -343,7 +357,32 @@ local function InPlayerData(meta, Key)
 		__SaveQueue[key] = nil
 	end
 	
-	local function create_safe_saving_record
+	local function create_safe_saving_record(key, wal : DataStore, data : DataStore, backup : DataStore)
+		local calledSince = workspace:GetServerTimeNow()
+		
+		while meta.Enabled and __SaveQueue[key] and __DataCache[key] do
+			local now = workspace:GetServerTimeNow()
+			local currentData = __DataCache[key]
+			
+			if now - calledSince >= meta.DefaultSavingDataCountdown then
+				__LockSessions:Acquire(key)
+				
+				local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
+				
+				if codeStatus == "wal_disabled" then
+					write_data(data, key, currentData)
+					write_backup(backup, key, currentData)
+				end
+				
+				__LockSessions:Release(key)
+				
+				break
+			end
+			task.wait(1)
+		end
+		
+		__SaveQueue[key] = nil
+	end
 	
 	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
 		dispatch(record.key, "OnDataLoading")
@@ -365,8 +404,9 @@ local function InPlayerData(meta, Key)
 					return false, obtainedData
 				end
 			end
-
-			dispatch(record.key, "OnDataLoaded", obtainedData)
+			
+			local clone = deepclone(obtainedData)
+			dispatch(record.key, "OnDataLoaded", clone)
 			return true, obtainedData
 		end
 		
@@ -423,7 +463,8 @@ local function InPlayerData(meta, Key)
 			return status, data
 		end
 		
-		dispatch(record.key, "OnDataLoaded", obtainedData)
+		local clone = deepclone(obtainedData)
+		dispatch(record.key, "OnDataLoaded", clone)
 		
 		if not __DataCache[record.key] then
 			__DataCache[record.key] = obtainedData
@@ -463,7 +504,9 @@ local function InPlayerData(meta, Key)
 			__SaveQueue[record.key] = coroutine.create(create_saving_record)
 			
 			coroutine.resume(__SaveQueue[record.key], record.key, wal, data, backup)
-			dispatch(record.key, "OnDataCached", Data)
+			
+			local clone = deepclone(__DataCache[record.key])
+			dispatch(record.key, "OnDataCached", clone)
 		end
 		
 		return true
@@ -488,12 +531,13 @@ local function InPlayerData(meta, Key)
 		local resultFunction = WritingFunction(clone)
 		
 		__DataCache[record.key] = resultFunction
+		local clone = deepclone(__DataCache[record.key])
 		
 		if not __SaveQueue[record.key] then
 			__SaveQueue[record.key] = coroutine.create(create_saving_record)
 			
 			coroutine.resume(__SaveQueue[record.key], record.key, wal, data, backup)
-			dispatch(record.key, "OnDataCached", resultFunction)
+			dispatch(record.key, "OnDataCached", clone)
 		end
 				
 		return true
@@ -557,7 +601,8 @@ local function InPlayerData(meta, Key)
 		if not currentData then
 			return false, "not_cached"
 		end
-		
+		local clone = deepclone(currentData)
+
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
 		
@@ -569,7 +614,7 @@ local function InPlayerData(meta, Key)
 				end)
 			end)
 			
-			dispatch(record.key, "OnDataArchived", currentData)
+			dispatch(record.key, "OnDataArchived", clone)
 		end
 		
 		pcall(function()
@@ -588,7 +633,7 @@ local function InPlayerData(meta, Key)
 		__SaveQueue[record.key] = nil
 		__DataCache[record.key] = nil
 		
-		dispatch(record.key, "OnDataRemoved", currentData)
+		dispatch(record.key, "OnDataRemoved", clone)
 		return true, "success"
 	end
 	
@@ -613,13 +658,14 @@ local function InPlayerData(meta, Key)
 			__DataCache[record.key] = Data
 		end
 		
+		local clone = deepclone(__DataCache[record.key])
 		local status, _, message = write_wal_optionally(wal, data, backup, record.key, __DataCache[record.key])
 		
 		if not status then
 			if message == "wal_disabled" then
 				write_data(data, record.key, __DataCache[record.key])
 				write_data(backup, record.key, __DataCache[record.key])
-				dispatch(record.key, "OnDataSaved", __DataCache[record.key])
+				dispatch(record.key, "OnDataSaved", clone)
 
 				return true
 			end
@@ -630,7 +676,7 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
-		dispatch(record.key, "OnDataSaved", __DataCache[record.key])
+		dispatch(record.key, "OnDataSaved", clone)
 		return true
 	end
 	
@@ -653,7 +699,8 @@ local function InPlayerData(meta, Key)
 		local resultFunction = WritingFunction(clone)
 		
 		__DataCache[record.key] = resultFunction
-		
+		local clone = deepclone(__DataCache[record.key])
+
 		local status, _, message = write_wal_optionally(wal, data, backup, record.key, resultFunction)
 		
 		if not status then
@@ -661,7 +708,7 @@ local function InPlayerData(meta, Key)
 				write_data(data, record.key, resultFunction)
 				write_data(backup, record.key, resultFunction)
 				
-				dispatch(record.key, "OnDataSaved", resultFunction)
+				dispatch(record.key, "OnDataSaved", clone)
 
 				return true
 			end
@@ -672,7 +719,7 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
-		dispatch(record.key, "OnDataSaved", resultFunction)
+		dispatch(record.key, "OnDataSaved", clone)
 		return true
 	end
 	
@@ -691,6 +738,7 @@ local function InPlayerData(meta, Key)
 		
 		if __DataCache[record.key] then
 			obtainedData = __DataCache[record.key]
+			local clone = deepclone(__DataCache[record.key])
 
 			if ExclusivePlayer then
 				if ensure_exc_player(ExclusivePlayer) then
@@ -702,7 +750,7 @@ local function InPlayerData(meta, Key)
 				status = true
 			end
 
-			dispatch(record.key, "OnDataLoaded", obtainedData)
+			dispatch(record.key, "OnDataLoaded", clone)
 			return status, obtainedData
 		end
 		
@@ -768,13 +816,43 @@ local function InPlayerData(meta, Key)
 			coroutine.resume(__AutosaveTimestamp[record.key], data, wal, backup)
 		end
 		
+		local clone = deepclone(obtainedData)
+		dispatch(record.key, "OnDataLoaded", clone)
+		
 		return status, obtainedData
 	end
 	
-	function record:SafeSave(Data: any, SegmentIndex: number?, SetAttempts: number?, YieldTime: number?)
+	function record:SafeSave(Data: any, SegmentIndex: number?)
+		local now = workspace:GetServerTimeNow()
+		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
+		__SaveTimestamp[record.key] = now
+		
 		dispatch(record.key, "OnDataSaving")
 		
+		if not __DataCache[record.key] then
+			return false
+		end
 		
+		local wal = meta._CurrentWALDataStore
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		
+		if SegmentIndex then
+			__DataCache[record.key][SegmentIndex] = Data
+		else
+			__DataCache[record.key] = Data
+		end
+		
+		if not __SaveQueue[record.key] then
+			__SaveQueue[record.key] = coroutine.create(create_safe_saving_record)
+			
+			coroutine.resume(__SaveQueue[record.key], record.key, wal, data, backup)
+			
+			local clone = deepclone(__DataCache[record.key])
+			dispatch(record.key, "OnDataCached", clone)
+		end
+		
+		return true
 	end
 	
 	function record:SafeWrite(Data: any, WritingFunction: (CurrentData: any) -> any, LoadAttempts: number?, SetAttempts: number?, YieldTime: number?)
@@ -826,6 +904,8 @@ local function InPlayerData(meta, Key)
 	end
 	
 	function record:CreateValidation(ValidationFunction: (PredicateDummy: MyDataValidationDummy) -> any)
+		local dummyMethods = {}
+		
 		
 	end
 	
@@ -887,7 +967,8 @@ function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configuratio
 	self._CurrentBackupDataStore = DataStoreService:GetDataStore(DataStoreName..self.BackupDataSuffix, _scope)
 	self._CurrentArchivedDataStore = DataStoreService:GetDataStore(DataStoreName..self.ArchivationSuffix, _scope)
 	self._DataStoreName = DataStoreName
-
+	
+	self._TrackedValidations = {} -- { [Key] = { Member = ValidationFunction, ... } }
 	self._MyDataCallbacks = SDictionary.new("string", "table", {
 		OnDataLoaded = {},
 		OnDataSaved = {},
