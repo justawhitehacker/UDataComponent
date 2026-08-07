@@ -9,7 +9,11 @@ local MessagingService = game:GetService("MessagingService")
 local SDictionary = require(script.SDictionary)
 local Mutex = require(script.Mutex)
 
-local __SaveQueue = {} -- { [Key: string] = boolean: boolean }
+local __GetTimestamp = {} -- { [Key: string] = timestamp: number }
+local __SaveTimestamp = {} -- { [Key: string] = timestamp: number }
+local __AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
+local __SaveQueue = {} -- { [Key: string] = coroutine: thread }
+local __DataCache = {} -- { [Key: string] = Data: any }
 local __BoundRegistry = {} -- { [Key: string] = PlayerId: number }
 local __LockSessions = Mutex.new()
 local __ShutdownCalled = false
@@ -21,14 +25,15 @@ export type MyDataValidationDummy = {
 
 export type MyDataRecord = {
 	Get: (self: MyDataRecord, ExclusivePlayer: Player?) -> any,
-	Set: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
+	Save: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
 	Write: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any) -> (),
 	Flush: (self: MyDataRecord) -> (),
 	Recover: (self: MyDataRecord) -> boolean,
 	Detach : (self: MyDataRecord) -> (),
-	ForceSet: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
+	ForceSave: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
+	ForceWrite: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any) -> (),
 	SafeGet: (self: MyDataRecord, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> any,
-	SafeSet: (self: MyDataRecord, Data: any, SegmentIndex: number?, SetAttempts: number?, YieldTime: number?) -> (),
+	SafeSave: (self: MyDataRecord, Data: any, SegmentIndex: number?, SetAttempts: number?, YieldTime: number?) -> (),
 	SafeWrite: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any, LoadAttempts: number?, SetAttempts: number?, YieldTime: number?) -> (),
 	AcquireLockSession: (self: MyDataRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, number), 
 	ReleaseLockSession: (self: MyDataRecord, OwnerIdentity: string) -> (),
@@ -38,24 +43,29 @@ export type MyDataRecord = {
 	IsExclusiveAccessBound: (self: MyDataRecord, ExclusivePlayer: Player) -> boolean,
 	IsPlayerInExclusiveAccess: (self: MyDataRecord, PlayerThatAssumedExclusive: Player) -> boolean,
 	CreateValidation: (self: MyDataRecord, ValidationFunction: (ValidationDummy: MyDataValidationDummy) -> any) -> (),
-	SmartCleanCache: (self: MyDataRecord, Interval: number?) -> ()
+	SmartCleanCache: (self: MyDataRecord, Interval: number?) -> (),
+	GetVersion: (self: MyDataRecord) -> number
 }
 
 export type MyDataCallbackFunctions = {
-	OnDataLoaded: (Key: string, CurrentData: {any?}) -> (),
-	OnDataSaved: (Key: string, PreviousData: {any?}, CurrentData: {any?}) -> (),
-	OnDataRemoved: (Key: string, RemovedData: {any?}) -> (),
-	OnDataBinding: (Key: string, Data: {any?}) -> (),
-	OnDataUnbinding: (Key: string, Data: {any?}) -> (),
+	OnDataLoading: (Key: string) -> (),
+	OnDataLoaded: (Key: string, CurrentData: any) -> (),
+	OnDataSaving: (Key: string) -> (),
+	OnDataSaved: (Key: string, CurrentData: any) -> (),
+	OnDataArchived: (Key: string, ArchivedData: any) -> (),
+	OnDataCached: (Key: string, CurrentData: any) -> (),
+	OnDataRemoved: (Key: string, RemovedData: any) -> (),
+	OnDataBinding: (Key: string, Data: any) -> (),
+	OnDataUnbinding: (Key: string, Data: any) -> (),
 	OnReleased: (Key: string) -> (),
 	OnDataError: (Key: string, Reason: string) -> ()
 }
 
 export type MyDataInfo = {
-	GetPlayerData: (self: MyDataInfo, Key: string, Callbacks: {MyDataCallbackFunctions?}) -> MyDataRecord,
-	GetDataStoreName: (self: MyDataInfo) -> string,
-	RemovePlayerData: (self: MyDataInfo, Key: string) -> boolean,
+	GetPlayerData: (self: MyDataInfo, Key: string | number, Callbacks: {MyDataCallbackFunctions?}) -> MyDataRecord,
+	GetDataStoreName: (self: MyDataInfo) -> string | number,
 	
+	Enabled : boolean,
 	RequestTimestampLimit : number,
 	WALEnabled : boolean,
 	WritingDataAgeEnabled : boolean,
@@ -90,47 +100,521 @@ export type MyData = {
 	SetDataInfoBlueprint: (DataInfo: MyDataInfo, PlayerDataBlueprint: {any?}) -> boolean
 }
 
-local function InPlayerData(self_param, Key)
-	assert(typeof(self_param) == "table", "InPlayerData must be called from a MyDataInfo object")
-	assert(typeof(Key) == "string", "Key must be a string or id")
-	
-	local meta = getmetatable(self_param)
+local function InPlayerData(meta, Key)
+	assert(typeof(meta) == "table", "InPlayerData must be called from a MyDataInfo object")
+	assert(typeof(Key) == "string" or typeof(Key) == "number", "Key must be a string or id")
 	
 	local record = {}
+	record.key = Key
+	
+	local function dispatch(key, eventName, ...)
+		local args = table.pack(...)
+
+		local suc, err = pcall(function()
+			local callbacks = meta._MyDataCallbacks:Get(eventName)
+			
+			if callbacks then
+				local callback = callbacks[key]
+				if not callback then return end
+				
+				callback(table.unpack(args))
+			end
+		end)
+		
+		if not suc then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's callback error happened, reason: " .. tostring(err))
+		end
+	end
+
+	local function match_key(key : string, strid : string)
+		key = tostring(key)
+		strid = tostring(strid)
+		
+		if key == "" or strid == "" then
+			return false
+		end
+		
+		local startpos, endpos = string.find(key, strid, 1, true)
+		if startpos == nil or endpos == nil then return false end
+		
+		local obtainedId = string.sub(key, startpos, endpos)
+		if obtainedId == strid then
+			return true
+		end
+		
+		return false
+	end
+	
+	local function ensure_exc_player(player)
+		assert(typeof(player) == "Instance" and player:IsA("Player"))
+		
+		if not meta.ExclusiveAccessEnabled then
+			return false
+		end
+		
+		if RunService:IsClient() then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: Currently trying to set player as exclusive, named " .. player.Name ..  ", but called from clientt.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Currently trying to set player as exclusive, named " .. player.Name ..  ", but called from client.")
+			return false
+		end
+		
+		local id = player.UserId 		
+		local strid = tostring(id)
+		
+		return match_key(record.key, strid)
+	end
+	
+	local function call_backup(backup)
+		local obtainedData = nil
+		
+		if not meta.BackupEnabled then
+			return false, meta.DataBlueprint
+		end
+		
+		local _attempts = 0
+		repeat
+			local suc, err = pcall(function()
+				obtainedData = backup:GetAsync(Key)
+			end)
+			
+			if not suc then
+				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Get error happened, reason: " .. tostring(err))
+				dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to obtain data from backup, trying to get data again...")
+			end
+			
+			_attempts += 1
+			task.wait(meta.BackupYieldDuration or 3)
+		until _attempts >= meta.DefaultDataLoadingAttempts or obtainedData ~= nil
+		
+		if obtainedData == nil then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot check the record of the data from this key from backup")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to obtain data from backup, switching data to template/blueprint")
+			
+			return false, meta.DataBlueprint
+		end
+		
+		return true, obtainedData
+	end
+	
+	local function write_data(data : DataStore, key, currentData)
+		local dataSuccess, err = pcall(function()
+			return data:UpdateAsync(key, function(old)
+				return currentData				
+			end)
+		end)
+
+		if not dataSuccess then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data, reason: " .. tostring(err))
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data.")
+
+			return false, nil, "write_data_failed"
+		end
+		
+		dispatch(record.key, "OnDataSaved", currentData)
+		return true, dataSuccess, "write_data_success"
+	end
+	
+	local function write_backup(backup : DataStore, key, currentData)
+		if not meta.BackupEnabled then
+			return false, nil, "backup_disabled"
+		end
+		
+		local backupSuccess, err = pcall(function()
+			return backup:UpdateAsync(key, function(old)
+				return currentData				
+			end)
+		end)
+		
+		if not backupSuccess then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data to backup, reason: " .. tostring(err))
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data to backup.")
+			
+			return false, nil, "write_backup_failed"
+		end
+		
+		return true, backupSuccess, "write_backup_success"
+	end
+	
+	local function write_wal_optionally(wal : DataStore, data : DataStore, backup : DataStore, key, currentData)
+		if not meta.WALEnabled then
+			return false, nil, "wal_disabled"
+		end
+		
+		local walSuccess, err = pcall(function()
+			return wal:UpdateAsync(key, function(old)
+				return currentData				
+			end)
+		end)
+
+		if not walSuccess then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write WAL before actual Data, reason: " .. tostring(err))
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write WAL before actual Data.")
+
+			return false, nil, "write_wal_failed"
+		end
+		
+		local dataSuccess, _, _ = write_data(data, key, currentData)
+		local backupSuccess, _, _ = write_backup(backup, key, currentData)
+		
+		if dataSuccess and backupSuccess then
+			pcall(function()
+				wal:RemoveAsync(key)
+			end)
+		else
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data or/and Backup, WAL remained for backup, reason: " .. tostring(err))
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data or/and Backup, WAL remained for backup soon.")
+			
+			return false, nil, "write_data_orand_backup_failed"
+		end
+		
+		return true, walSuccess, "write_wal_success"
+	end
+	
+	local function create_saving_record(key, wal : DataStore, data : DataStore, backup : DataStore)
+		local calledSince = workspace:GetServerTimeNow()
+
+		while meta.Enabled do
+			local now = workspace:GetServerTimeNow()
+			local currentData = __DataCache[key]
+			
+			if now - calledSince >= meta.DefaultSavingDataCountdown then
+				local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
+				
+				if codeStatus == "wal_disabled" then
+					write_data(data, key, currentData)
+					write_backup(backup, key, currentData)
+				end
+				
+				break
+			end
+			task.wait(1)
+		end
+		
+		__SaveQueue[key] = nil
+	end
 	
 	function record:Get(ExclusivePlayer: Player?)
+		local now = workspace:GetServerTimeNow()
+		if __GetTimestamp[record.key] and now - __GetTimestamp[record.key] < meta.RequestTimestampCooldown then return end
+		__GetTimestamp[record.key] = now
 		
+		dispatch(record.key, "OnDataLoading")
+		
+		local currentData = meta._CurrentDataStore
+		local currentBackupData = meta._CurrentBackupDataStore
+				
+		local _attempts = 0
+		local obtainedData = nil
+		
+		if __DataCache[record.key] then
+			obtainedData = __DataCache[record.key]
+			
+			if ExclusivePlayer and obtainedData then
+				if ensure_exc_player(ExclusivePlayer) then
+					return true, obtainedData
+				else
+					return false, obtainedData
+				end
+			end
+			
+			dispatch(record.key, "OnDataLoaded", obtainedData)
+			return true, obtainedData
+		end
+		
+		repeat
+			local suc, err = pcall(function()
+				obtainedData = currentData:GetAsync(Key)
+			end)
+			
+			if not suc then
+				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Get error happened, reason: " .. tostring(err))
+				dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: happened in Get's function, caused by failed to obtain data, trying to get data again...")		
+			end
+			
+			_attempts += 1
+			task.wait(meta.DefaultDataLoadingYieldDuration or 3)
+		until _attempts >= meta.DefaultDataLoadingAttempts or obtainedData ~= nil
+		
+		if obtainedData == nil then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot obtain the record of the data from this key, trying to get data from backup")
+			dispatch(record.key, "OnDataError", "Error happened while trying to obtain data, trying to obtain data from backup...")
+			
+			local status, backupData = call_backup(currentBackupData)
+			
+			if not __DataCache[record.key] then
+				__DataCache[record.key] = if status then backupData else table.clone(meta.DataBlueprint)
+			end
+
+			return status, backupData
+		end
+		
+		if ExclusivePlayer and obtainedData then
+			local status, data
+			if ensure_exc_player(ExclusivePlayer) then
+				status, data = true, obtainedData
+			else
+				status, data = false, meta.DataBlueprint
+			end
+			
+			if not __DataCache[record.key] then
+				__DataCache[record.key] = data
+			end
+			
+			return status, data
+		end
+		
+		dispatch(record.key, "OnDataLoaded", obtainedData)
+		
+		if not __DataCache[record.key] then
+			__DataCache[record.key] = obtainedData
+		end		
+		
+		return true, obtainedData
 	end
 	
-	function record:Set(Data: any, SegmentIndex: number?)
+	function record:Save(Data: any, SegmentIndex: number?)
+		local now = workspace:GetServerTimeNow()
+		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
+		__SaveTimestamp[record.key] = now
 		
+		dispatch(record.key, "OnDataSaving")
+		
+		if not __DataCache[record.key] then
+			return false
+		end
+		
+		local wal = meta._CurrentWALDataStore
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		
+		if SegmentIndex then
+			__DataCache[record.key][SegmentIndex] = Data
+		else
+			__DataCache[record.key] = Data
+		end
+		
+		if not __SaveQueue[record.key] then
+			__SaveQueue[record.key] = coroutine.create(create_saving_record)
+			
+			coroutine.resume(__SaveQueue[record.key], record.key, wal, data, backup)
+			dispatch(record.key, "OnDataCached", Data)
+		end
+		
+		return true
 	end
 	
-	function record:Write(Data: any, WritingFunction: (CurrentData: any) -> any)
+	function record:Write(WritingFunction: (CurrentData: any) -> any)
+		local now = workspace:GetServerTimeNow()
+		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
+		__SaveTimestamp[record.key] = now
 		
+		dispatch(record.key, "OnDataSaving")
+		
+		if not __DataCache[record.key] then
+			return false
+		end
+		
+		local wal = meta._CurrentWALDataStore
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		
+		local clone = table.clone(__DataCache[record.key])
+		local resultFunction = WritingFunction(clone)
+		
+		__DataCache[record.key] = resultFunction
+		
+		if not __SaveQueue[record.key] then
+			__SaveQueue[record.key] = coroutine.create(create_saving_record)
+			
+			coroutine.resume(__SaveQueue[record.key], record.key, wal, data, backup)
+			dispatch(record.key, "OnDataCached", resultFunction)
+		end
+		
+		return true
 	end
 	
 	function record:Flush()
 		
 	end
 	
-	function record:Recover()
+	function record:TryToRecover()
+		if not meta.WALEnabled then
+			return false, "wal_disabled"
+		end
 		
+		local wal = meta._CurrentWALDataStore
+		
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		
+		local recoveredData = nil
+		local _walAttempts = 0
+		repeat
+			local status, err = pcall(function()
+				recoveredData = wal:GetAsync(record.key)
+			end)
+			
+			if not status then
+				warn("[" .. meta.ErrorReasonNamespace .. "]: Unexpected error happened when trying to recover data from WAL, with reason: " .. tostring(err))
+				dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unexpected error happened, when trying to recover data that was dead from WAL.")
+			end
+			
+			_walAttempts += 1
+			task.wait(meta.DefaultDataLoadingYieldDuration or 3)
+		until _walAttempts >= meta.DefaultDataLoadingAttempts or recoveredData ~= nil
+		
+		if not recoveredData then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: There is no WAL history to recover the data.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: There is no WAL history to recover the data, meaning the data has been successfully written or no record tracked.")
+			
+			return false, "failed_recover"
+		end
+		
+		local status, _, message = write_wal_optionally(wal, data, backup, record.key, recoveredData)
+		
+		if not status then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: Failed to recover data from WAL, with reason: " .. tostring(message))
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed to recover data from WAL.")
+			
+			return false, "failed_recover"
+		end
+		
+		return true, "success"
 	end
 	
 	function record:Detach()
+		if meta.StrictlyUnallowDetaching then
+			return false, "unallowed_detach"
+		end
 		
+		local currentData = __DataCache[record.key]
+		if not currentData then
+			return false, "not_cached"
+		end
+		
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		
+		if meta.ArchivationEnabled then
+			local archive = meta._CurrentArchivedDataStore
+			pcall(function()
+				archive:UpdateAsync(record.key .. "_" .. os.time(), function()
+					return currentData
+				end)
+			end)
+			
+			dispatch(record.key, "OnDataArchived", currentData)
+		end
+		
+		pcall(function()
+			data:RemoveAsync(record.key)
+		end)
+		
+		if meta.BackupRemovedWhenDetached then
+			pcall(function()
+				backup:RemoveAsync(record.key)
+			end)
+		end
+		
+		__BoundRegistry[record.key] = nil
+		__SaveTimestamp[record.key] = nil
+		__GetTimestamp[record.key] = nil
+		__SaveQueue[record.key] = nil
+		__DataCache[record.key] = nil
+		
+		dispatch(record.key, "OnDataRemoved", currentData)
+		return true, "success"
 	end
 	
-	function record:ForceSet(Data: any, SegmentIndex: number?)
+	function record:ForceSave(Data: any, SegmentIndex: number?)
+		local now = workspace:GetServerTimeNow()
+		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
+		__SaveTimestamp[record.key] = now
 		
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		local wal = meta._CurrentWALDataStore
+		
+		dispatch(record.key, "OnDataSaving")		
+		
+		if not __DataCache[record.key] then
+			return false
+		end
+		
+		if SegmentIndex then
+			__DataCache[record.key][SegmentIndex] = Data
+		else
+			__DataCache[record.key] = Data
+		end
+		
+		local status, _, message = write_wal_optionally(wal, data, backup, record.key, __DataCache[record.key])
+		
+		if not status then
+			if message == "wal_disabled" then
+				write_data(data, record.key, __DataCache[record.key])
+				write_data(backup, record.key, __DataCache[record.key])
+				dispatch(record.key, "OnDataSaved", __DataCache[record.key])
+
+				return true
+			end
+			
+			warn("[" .. meta.ErrorReasonNamespace .. "]: Failed to save data, with reason: " .. tostring(message))
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed to save data.")
+			
+			return false
+		end
+		
+		dispatch(record.key, "OnDataSaved", __DataCache[record.key])
+		return true
+	end
+	
+	function record:ForceWrite(Data: any, WritingFunction: (CurrentData: any) -> any)
+		local now = workspace:GetServerTimeNow()
+		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
+		__SaveTimestamp[record.key] = now
+		
+		dispatch(record.key, "OnDataSaving")
+		
+		if not __DataCache[record.key] then
+			return false
+		end
+		
+		local wal = meta._CurrentWALDataStore
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		
+		local clone = table.clone(__DataCache[record.key])
+		local resultFunction = WritingFunction(clone)
+		
+		__DataCache[record.key] = resultFunction
+		
+		local status, _, message = write_wal_optionally(wal, data, backup, record.key, resultFunction)
+		
+		if not status then
+			if message == "wal_disabled" then
+				write_data(data, record.key, resultFunction)
+				write_data(backup, record.key, resultFunction)
+				
+				dispatch(record.key, "OnDataSaved", resultFunction)
+
+				return true
+			end
+			
+			warn("[" .. meta.ErrorReasonNamespace .. "]: Failed to save data, with reason: " .. tostring(message))
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed to save data.")
+			
+			return false
+		end
+		
+		dispatch(record.key, "OnDataSaved", resultFunction)
+		return true
 	end
 	
 	function record:SafeGet(ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?)
 		
 	end
 	
-	function record:SafeSet(Data: any, SegmentIndex: number?, SetAttempts: number?, YieldTime: number?)
+	function record:SafeSave(Data: any, SegmentIndex: number?, SetAttempts: number?, YieldTime: number?)
 		
 	end
 	
@@ -174,6 +658,10 @@ local function InPlayerData(self_param, Key)
 		
 	end
 	
+	function record:GetVersion()
+		
+	end
+	
 	return record
 end
 
@@ -181,30 +669,21 @@ function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configuratio
 	local _scope = Scope or "global"
 	
 	local self = setmetatable({}, MyData)
-	self._CurrentDataStore = DataStoreService:GetDataStore(DataStoreName, _scope)
-	self._CurrentWALDataStore = DataStoreService:GetDataStore(DataStoreName..self.WALDataSuffix, _scope)
-	self._CurrentBackupDataStore = DataStoreService:GetDataStore(DataStoreName..self.BackupDataSuffix, _scope)
-	self._DataStoreName = DataStoreName
-	
-	self._MyDataCallbacks = SDictionary.new("string", "table", {
-		OnDataLoaded = {},
-		OnDataSaved = {},
-		OnDataRemoved = {},
-		OnDataBinding = {},
-		OnDataUnbinding = {},
-		OnReleased = {},
-		OnDataError = {}
-	})
 	
 	self._DataPredicates = SDictionary.new("string", "table", {}) -- { [Key] = predicateFunction }
 		
-	self.RequestTimestampLimit = 5
+	self.Enabled = true
+	self.RequestTimestampCooldown = 2
+	self.DefaultSavingDataCountdown = 30
+	self.DefaultDataLoadingAttempts = 5
+	self.DefaultDataLoadingYieldDuration = 3
 	self.WALEnabled = false
 	self.WritingDataAgeEnabled = false
 	self.DefaultSaveAttempts = 5
 	self.DefaultYieldAttempts = 3
 	self.MaxKeyLength = 50
 	self.BackupEnabled = true
+	self.BackupYieldDuration = 3
 	self.StrictlyUnallowDetaching = true
 	self.BackupRemovedWhenDetached = false
 	self.AutoSaveEnabled = true
@@ -223,8 +702,27 @@ function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configuratio
 	self.ErrorReasonNamespace = "MyData"
 	self.MessagingEnabled = false
 	self.MessagingNamespace = "MyDataReplication"
+	self.ArchivationEnabled = true
+	self.ArchivationSuffix = "_archive"
 	self.MessagingDebugEnabled = false
 	self.DefaultCacheCleanupInterval = 300 -- 300 seconds
+	
+	self._CurrentDataStore = DataStoreService:GetDataStore(DataStoreName, _scope)
+	self._CurrentWALDataStore = DataStoreService:GetDataStore(DataStoreName..self.WALDataSuffix, _scope)
+	self._CurrentBackupDataStore = DataStoreService:GetDataStore(DataStoreName..self.BackupDataSuffix, _scope)
+	self._CurrentArchivedDataStore = DataStoreService:GetDataStore(DataStoreName..self.ArchivationSuffix, _scope)
+	self._DataStoreName = DataStoreName
+
+	self._MyDataCallbacks = SDictionary.new("string", "table", {
+		OnDataLoaded = {},
+		OnDataSaved = {},
+		OnDataCached = {},
+		OnDataRemoved = {},
+		OnDataBinding = {},
+		OnDataUnbinding = {},
+		OnReleased = {},
+		OnDataError = {}
+	})
 	
 	if Configurations then
 		for key, value in pairs(Configurations) do
@@ -240,18 +738,18 @@ function MyData.SetDataInfoBlueprint(DataInfo : MyDataInfo, PlayerDataBlueprint 
 	return true
 end
 
-function MyData:GetPlayerData(Key : string, Callbacks : {MyDataCallbackFunctions?}) : MyDataRecord
+function MyData:GetPlayerData(Key : string | number, Callbacks : {MyDataCallbackFunctions?}) : MyDataRecord
 	if Callbacks then
 		for key, value in pairs(Callbacks) do
 			local currentFunc = self._MyDataCallbacks:Get(key)
 			
 			if currentFunc then
-				table.insert(currentFunc, value)
+				currentFunc[Key] = value
 			end
 		end
 	end
 	
-	return InPlayerData(self, Key)
+	return InPlayerData(self, Key) :: MyDataRecord
 end
 
 function MyData:GetDataStoreName() : string
