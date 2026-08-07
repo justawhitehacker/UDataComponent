@@ -5,9 +5,13 @@ local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local MessagingService = game:GetService("MessagingService")
+local HttpService = game:GetService("HttpService")
+
+local __sc = script.ScopedMutex
 
 local SDictionary = require(script.SDictionary)
-local Mutex = require(script.Mutex)
+local Mutex = require(__sc.Mutex)
+local ScopedMutex = require(__sc)
 
 local __GetTimestamp = {} -- { [Key: string] = timestamp: number }
 local __SaveTimestamp = {} -- { [Key: string] = timestamp: number }
@@ -15,7 +19,8 @@ local __AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
 local __SaveQueue = {} -- { [Key: string] = coroutine: thread }
 local __DataCache = {} -- { [Key: string] = Data: any }
 local __BoundRegistry = {} -- { [Key: string] = PlayerId: number }
-local __LockSessions = Mutex.new()
+local __LockSessions = ScopedMutex.new(Mutex)
+local __LockTimers = {}
 local __ShutdownCalled = false
 
 export type MyDataValidationDummy = {
@@ -24,7 +29,7 @@ export type MyDataValidationDummy = {
 }
 
 export type MyDataRecord = {
-	Get: (self: MyDataRecord, ExclusivePlayer: Player?) -> any,
+	Get: (self: MyDataRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?) -> any,
 	Save: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
 	Write: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any) -> (),
 	Flush: (self: MyDataRecord) -> (),
@@ -32,7 +37,7 @@ export type MyDataRecord = {
 	Detach : (self: MyDataRecord) -> (),
 	ForceSave: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
 	ForceWrite: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any) -> (),
-	SafeGet: (self: MyDataRecord, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> any,
+	SafeGet: (self: MyDataRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> any,
 	SafeSave: (self: MyDataRecord, Data: any, SegmentIndex: number?, SetAttempts: number?, YieldTime: number?) -> (),
 	SafeWrite: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any, LoadAttempts: number?, SetAttempts: number?, YieldTime: number?) -> (),
 	AcquireLockSession: (self: MyDataRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, number), 
@@ -53,6 +58,7 @@ export type MyDataCallbackFunctions = {
 	OnDataSaving: (Key: string) -> (),
 	OnDataSaved: (Key: string, CurrentData: any) -> (),
 	OnDataArchived: (Key: string, ArchivedData: any) -> (),
+	OnDataRecovery: (Key: string) -> (),
 	OnDataCached: (Key: string, CurrentData: any) -> (),
 	OnDataRemoved: (Key: string, RemovedData: any) -> (),
 	OnDataBinding: (Key: string, Data: any) -> (),
@@ -270,10 +276,54 @@ local function InPlayerData(meta, Key)
 		return true, walSuccess, "write_wal_success"
 	end
 	
+
+	local function call_autosave(key, data : DataStore, wal : DataStore, backup : DataStore)
+		local calledSince = workspace:GetServerTimeNow()
+		
+		while meta.Enabled and __DataCache[key] and __AutosaveTimestamp[key] do
+			local now = workspace:GetServerTimeNow()
+			local currentData = __DataCache[key]
+			
+			if now - calledSince >= meta.AutoSaveInterval then
+				local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
+				
+				if codeStatus == "wal_disabled" then
+					write_data(data, key, currentData)
+					write_backup(backup, key, currentData)
+				end
+				
+				calledSince = now
+			end
+			
+			task.wait(1)
+		end
+	end
+	
+	local function create_lock_timer(ownerId, timeout)
+		ownerId = tostring(ownerId)
+		
+		if not __LockTimers[ownerId] then
+			__LockTimers[ownerId] = coroutine.create(function()
+				local now = workspace:GetServerTimeNow()
+				
+				while meta.Enabled and __LockTimers[ownerId] do
+					if now - __LockTimers[ownerId] >= timeout then
+						record:ReleaseLockSession(ownerId)						
+						break
+					end
+				end
+				
+				__LockTimers[ownerId] = nil
+			end)
+			
+			coroutine.resume(__LockTimers[ownerId])
+		end
+	end
+	
 	local function create_saving_record(key, wal : DataStore, data : DataStore, backup : DataStore)
 		local calledSince = workspace:GetServerTimeNow()
 
-		while meta.Enabled do
+		while meta.Enabled and __SaveQueue[key] and __DataCache[key] do
 			local now = workspace:GetServerTimeNow()
 			local currentData = __DataCache[key]
 			
@@ -293,22 +343,21 @@ local function InPlayerData(meta, Key)
 		__SaveQueue[key] = nil
 	end
 	
-	function record:Get(ExclusivePlayer: Player?)
-		local now = workspace:GetServerTimeNow()
-		if __GetTimestamp[record.key] and now - __GetTimestamp[record.key] < meta.RequestTimestampCooldown then return end
-		__GetTimestamp[record.key] = now
-		
+	local function create_safe_saving_record
+	
+	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
 		dispatch(record.key, "OnDataLoading")
-		
+
 		local currentData = meta._CurrentDataStore
 		local currentBackupData = meta._CurrentBackupDataStore
-				
+		local currentWALData = meta._CurrentWALDataStore
+
 		local _attempts = 0
 		local obtainedData = nil
-		
+
 		if __DataCache[record.key] then
 			obtainedData = __DataCache[record.key]
-			
+
 			if ExclusivePlayer and obtainedData then
 				if ensure_exc_player(ExclusivePlayer) then
 					return true, obtainedData
@@ -316,9 +365,20 @@ local function InPlayerData(meta, Key)
 					return false, obtainedData
 				end
 			end
-			
+
 			dispatch(record.key, "OnDataLoaded", obtainedData)
 			return true, obtainedData
+		end
+		
+		local now = workspace:GetServerTimeNow()
+		if __GetTimestamp[record.key] and now - __GetTimestamp[record.key] < meta.RequestTimestampCooldown then return false, nil end
+		__GetTimestamp[record.key] = now
+		
+		if LoadRecovery then
+			local recoverStatus, message = record:TryToRecover()
+			if recoverStatus then
+				dispatch(record.key, "OnDataRecovery")
+			end
 		end
 		
 		repeat
@@ -369,6 +429,12 @@ local function InPlayerData(meta, Key)
 			__DataCache[record.key] = obtainedData
 		end		
 		
+		if not __AutosaveTimestamp[record.key] then
+			__AutosaveTimestamp[record.key] = coroutine.create(call_autosave)
+			
+			coroutine.resume(__AutosaveTimestamp[record.key], currentData, currentWALData, currentBackupData)
+		end
+		
 		return true, obtainedData
 	end
 	
@@ -413,7 +479,7 @@ local function InPlayerData(meta, Key)
 		if not __DataCache[record.key] then
 			return false
 		end
-		
+				
 		local wal = meta._CurrentWALDataStore
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
@@ -429,7 +495,7 @@ local function InPlayerData(meta, Key)
 			coroutine.resume(__SaveQueue[record.key], record.key, wal, data, backup)
 			dispatch(record.key, "OnDataCached", resultFunction)
 		end
-		
+				
 		return true
 	end
 	
@@ -526,9 +592,9 @@ local function InPlayerData(meta, Key)
 		return true, "success"
 	end
 	
-	function record:ForceSave(Data: any, SegmentIndex: number?)
+	function record:ForceSave(Data: any, AlongCooldown : boolean?, SegmentIndex: number?)
 		local now = workspace:GetServerTimeNow()
-		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
+		if AlongCooldown and __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
 		__SaveTimestamp[record.key] = now
 		
 		local data = meta._CurrentDataStore
@@ -568,9 +634,9 @@ local function InPlayerData(meta, Key)
 		return true
 	end
 	
-	function record:ForceWrite(Data: any, WritingFunction: (CurrentData: any) -> any)
+	function record:ForceWrite(Data: any, WritingFunction: (CurrentData: any) -> any, AlongCooldown : boolean?)
 		local now = workspace:GetServerTimeNow()
-		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
+		if AlongCooldown and __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
 		__SaveTimestamp[record.key] = now
 		
 		dispatch(record.key, "OnDataSaving")
@@ -610,11 +676,104 @@ local function InPlayerData(meta, Key)
 		return true
 	end
 	
-	function record:SafeGet(ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?)
+	function record:SafeGet(LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?)
+		dispatch(record.key, "OnDataLoading")
+
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		local wal = meta._CurrentWALDataStore
+
+		local attempts = LoadAttempts or meta.DefaultDataLoadingAttempts or 5
+		local yieldTime = YieldTime or meta.DefaultDataLoadingYieldDuration or 3
+
+		local status = false
+		local obtainedData = nil
 		
+		if __DataCache[record.key] then
+			obtainedData = __DataCache[record.key]
+
+			if ExclusivePlayer then
+				if ensure_exc_player(ExclusivePlayer) then
+					status = true
+				else
+					status, obtainedData = false, meta.DataBlueprint
+				end
+			else
+				status = true
+			end
+
+			dispatch(record.key, "OnDataLoaded", obtainedData)
+			return status, obtainedData
+		end
+		
+		local now = workspace:GetServerTimeNow()
+		if __GetTimestamp[record.key] and now - __GetTimestamp[record.key] < meta.RequestTimestampCooldown then return false, nil end
+		__GetTimestamp[record.key] = now
+				
+		__LockSessions:Do(record.key, function()
+			local _attempts = 0
+			
+			if LoadRecovery then
+				local recoverStatus, message = record:TryToRecover()
+				if recoverStatus then
+					dispatch(record.key, "OnDataRecovery")
+				end
+			end
+			
+			repeat
+				local success, result = pcall(function()
+					obtainedData = data:GetAsync(record.key)
+				end)
+				
+				if not success then
+					warn("[" .. meta.ErrorReasonNamespace .. "]: Failed to load data, with reason: " .. tostring(result))
+					dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed to load data.")
+				end
+				
+				_attempts += 1
+				task.wait(yieldTime)
+			until _attempts >= attempts or obtainedData ~= nil
+			
+			if obtainedData == nil then
+				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot obtain the record of the data from this key, trying to get data from backup")
+				dispatch(record.key, "OnDataError", "Error happened while trying to obtain data, trying to obtain data from backup...")
+
+				local preStatus, backupData = call_backup(backup)
+
+				if not __DataCache[record.key] then
+					__DataCache[record.key] = if preStatus then backupData else table.clone(meta.DataBlueprint)
+				end
+
+				status, obtainedData = preStatus, backupData
+			else
+				status = true
+			end
+			
+			if ExclusivePlayer and obtainedData then
+				if ensure_exc_player(ExclusivePlayer) then
+					status = true
+				else
+					status, obtainedData = false, meta.DataBlueprint
+				end
+			end
+		end)
+		
+		if not __DataCache[record.key] then
+			__DataCache[record.key] = obtainedData
+		end		
+		
+		if not __AutosaveTimestamp[record.key] then
+			__AutosaveTimestamp[record.key] = coroutine.create(call_autosave)
+
+			coroutine.resume(__AutosaveTimestamp[record.key], data, wal, backup)
+		end
+		
+		return status, obtainedData
 	end
 	
 	function record:SafeSave(Data: any, SegmentIndex: number?, SetAttempts: number?, YieldTime: number?)
+		dispatch(record.key, "OnDataSaving")
+		
 		
 	end
 	
@@ -623,15 +782,31 @@ local function InPlayerData(meta, Key)
 	end
 	
 	function record:AcquireLockSession(OwnerIdentity: string?, Timeout: number?)
+		local now = workspace:GetServerTimeNow()
+		OwnerIdentity = OwnerIdentity or HttpService:GenerateGUID(false) .. "-" .. tostring(now)
+		Timeout = Timeout or 10
 		
+		local isSuccess = __LockSessions:Acquire(OwnerIdentity)
+		if not isSuccess then
+			return false, nil
+		end
+		
+		create_lock_timer(OwnerIdentity, Timeout)
+		return isSuccess, OwnerIdentity
 	end
 	
 	function record:ReleaseLockSession(OwnerIdentity: string)
-		
+		local timer = __LockTimers[OwnerIdentity]
+		if timer then
+			coroutine.close(timer)
+			__LockTimers[OwnerIdentity] = nil
+			
+			__LockSessions:Release(OwnerIdentity)
+		end
 	end
 	
 	function record:IsSessionLocked(OwnerIdentity: string)
-		
+		return __LockSessions:IsLocked(OwnerIdentity)
 	end
 	
 	function record:BindExclusiveAccess(ExclusivePlayer: Player)
