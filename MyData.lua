@@ -265,7 +265,7 @@ local function InPlayerData(meta, Key)
 		end
 		
 		local walSuccess, err = pcall(function()
-			return wal:UpdateAsync(key, function(old)
+			wal:UpdateAsync(key, function(old)
 				return currentData				
 			end)
 		end)
@@ -280,7 +280,7 @@ local function InPlayerData(meta, Key)
 		local dataSuccess, _, _ = write_data(data, key, currentData)
 		local backupSuccess, _, _ = write_backup(backup, key, currentData)
 		
-		if dataSuccess and backupSuccess then
+		if dataSuccess and backupSuccess and walSuccess then
 			pcall(function()
 				wal:RemoveAsync(key)
 			end)
@@ -294,6 +294,20 @@ local function InPlayerData(meta, Key)
 		return true, walSuccess, "write_wal_success"
 	end
 	
+	local function call_flush(key, data : DataStore, wal : DataStore, backup : DataStore)
+		local currentData = __DataCache[key]
+		if not currentData then return false end
+		
+		local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
+		if codeStatus == "wal_disabled" then
+			write_data(data, key, currentData)
+			write_backup(backup, key, currentData)
+		end
+		
+		__SaveQueue[key] = nil
+		
+		return true
+	end
 
 	local function call_autosave(key, data : DataStore, wal : DataStore, backup : DataStore)
 		local calledSince = workspace:GetServerTimeNow()
@@ -408,14 +422,23 @@ local function InPlayerData(meta, Key)
 		Players.PlayerRemoving:Connect(function(player)
 			for key, bound in pairs(__BoundRegistry) do
 				if bound.UserId == player.UserId then
-					
+					call_flush(key, meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
+					__BoundRegistry[key] = nil
 				end
 			end
 		end)
 		
 		game:BindToClose(function()
+			local pendingTask = 0
 			for key, bound in pairs(__BoundRegistry) do
-				
+				pendingTask += 1
+				coroutine.resume(bound.Coroutine, pendingTask)
+			end
+			
+			local remainingTime = 0
+			while pendingTask > 0 and remainingTime < 25 do
+				task.wait(1)
+				remainingTime += 1
 			end
 		end)
 	end
@@ -430,7 +453,11 @@ local function InPlayerData(meta, Key)
 		
 		__BoundRegistry[key] = {
 			UserId = player.UserId,
-			Since = timeSinceBound
+			Since = timeSinceBound,
+			Coroutine = coroutine.create(function(pendingTask)
+				call_flush(key, meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
+				pendingTask -= 1
+			end)
 		}
 		
 		if not __ExclusiveSafetyCalled then
@@ -440,7 +467,10 @@ local function InPlayerData(meta, Key)
 	end
 	
 	local function unbind_exclusive_access(key)
+		if not meta.ExclusiveAccessEnabled then return end
+		if not __BoundRegistry[key] then return end
 		
+		__BoundRegistry[key] = nil
 	end
 	
 	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
@@ -645,7 +675,11 @@ local function InPlayerData(meta, Key)
 	end
 	
 	function record:Flush()
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		local wal = meta._CurrentWALDataStore
 		
+		return call_flush(record.key, data, wal, backup)
 	end
 	
 	function record:TryToRecover()
