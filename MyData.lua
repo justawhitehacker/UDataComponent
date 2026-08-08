@@ -87,7 +87,6 @@ export type MyDataInfo = {
 	WALMaxEntries : number,
 	BackupDataSuffix : string,
 	ExclusiveAccessEnabled : boolean,
-	ExclusiveAccessAttempts : number,
 	ExclusiveAccessExpiration : number,
 	SwappingEnabled : boolean,
 	CacheFlushingInterval : number,
@@ -148,6 +147,33 @@ local function InPlayerData(meta, Key)
 	local function get_blueprint()
 		return deepclone(meta.DataBlueprint)
 	end
+	
+	local function is_still_exclusive(key, strid)
+		assert(typeof(strid) == "string")
+		
+		local days = meta.ExclusiveAccessExpiration
+		local now = workspace:GetServerTimeNow()
+		local dayInSec = 60 * 60 * 24
+		
+		local timeout = dayInSec * days
+		
+		local id = tonumber(strid)
+		if id == nil then
+			return false
+		end
+		
+		local bound = __BoundRegistry[key]
+		if not bound then
+			return false
+		end
+		
+		local boundId, since = bound.UserId, bound.Since
+		if not id or not since then
+			return false
+		end
+		
+		return id == boundId and now - id < timeout
+	end
 
 	local function match_key(key : string, strid : string)
 		key = tostring(key)
@@ -161,14 +187,14 @@ local function InPlayerData(meta, Key)
 		if startpos == nil or endpos == nil then return false end
 		
 		local obtainedId = string.sub(key, startpos, endpos)
-		if obtainedId == strid then
+		if obtainedId == strid and is_still_exclusive(key, strid) then
 			return true
 		end
 		
 		return false
 	end
 	
-	local function ensure_exc_player(player)
+	local function ensure_exc_player(key, player)
 		assert(typeof(player) == "Instance" and player:IsA("Player"))
 		
 		if not meta.ExclusiveAccessEnabled then
@@ -184,7 +210,7 @@ local function InPlayerData(meta, Key)
 		local id = player.UserId 		
 		local strid = tostring(id)
 		
-		return match_key(record.key, strid)
+		return match_key(key, strid)
 	end
 	
 	local function call_backup(backup)
@@ -220,21 +246,31 @@ local function InPlayerData(meta, Key)
 	end
 	
 	local function write_data(data : DataStore, key, currentData)
+		print("Called 1")
 		local dataSuccess, err = pcall(function()
 			return data:UpdateAsync(key, function(old)
 				return currentData				
 			end)
 		end)
+		
+		print("Called 2")
 
 		if not dataSuccess then
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data, reason: " .. tostring(err))
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data.")
+			
+			print("Called 3 1")
 
 			return false, nil, "write_data_failed"
 		end
 		
+		print("Called 3 2")
+		
 		local clone = deepclone(currentData)
 		dispatch(record.key, "OnDataSaved", clone)
+		
+		print("Called 4")
+		
 		return true, dataSuccess, "write_data_success"
 	end
 	
@@ -320,8 +356,8 @@ local function InPlayerData(meta, Key)
 				local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
 				
 				if codeStatus == "wal_disabled" then
-					write_data(data, key, currentData)
-					write_backup(backup, key, currentData)
+					local _, _, _ = write_data(data, key, currentData)
+					local _, _, _ = write_backup(backup, key, currentData)
 				end
 				
 				calledSince = now
@@ -365,8 +401,8 @@ local function InPlayerData(meta, Key)
 				local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
 				
 				if codeStatus == "wal_disabled" then
-					write_data(data, key, currentData)
-					write_backup(backup, key, currentData)
+					local _, _, _ = write_data(data, key, currentData)
+					local _, _, _ = write_backup(backup, key, currentData)
 				end
 				
 				break
@@ -390,8 +426,8 @@ local function InPlayerData(meta, Key)
 				local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
 				
 				if codeStatus == "wal_disabled" then
-					write_data(data, key, currentData)
-					write_backup(backup, key, currentData)
+					local _, _, _ = write_data(data, key, currentData)
+					local _, _, _ = write_backup(backup, key, currentData)
 				end
 				
 				__LockSessions:Release(key)
@@ -487,7 +523,7 @@ local function InPlayerData(meta, Key)
 			obtainedData = __DataCache[record.key]
 
 			if ExclusivePlayer and obtainedData then
-				if ensure_exc_player(ExclusivePlayer) then
+				if ensure_exc_player(record.key, ExclusivePlayer) then
 					return true, obtainedData
 				else
 					return false, get_blueprint()
@@ -529,17 +565,20 @@ local function InPlayerData(meta, Key)
 			dispatch(record.key, "OnDataError", "Error happened while trying to obtain data, trying to obtain data from backup...")
 			
 			local status, backupData = call_backup(currentBackupData)
+			local dataResult = if status then backupData else get_blueprint()
 			
 			if not __DataCache[record.key] then
-				__DataCache[record.key] = if status then backupData else get_blueprint()
+				__DataCache[record.key] = dataResult
 			end
+			local _, _, _ = write_data(currentData, record.key, dataResult) -- this will rewrite the main datastore when backup un/obtained the data
+			print("A")
 
 			return status, backupData
 		end
 		
 		if ExclusivePlayer and obtainedData then
 			local status, data
-			if ensure_exc_player(ExclusivePlayer) then
+			if ensure_exc_player(record.key, ExclusivePlayer) then
 				status, data = true, obtainedData
 			else
 				status, data = false, get_blueprint()
@@ -919,7 +958,7 @@ local function InPlayerData(meta, Key)
 			local clone = deepclone(__DataCache[record.key])
 
 			if ExclusivePlayer then
-				if ensure_exc_player(ExclusivePlayer) then
+				if ensure_exc_player(record.key, ExclusivePlayer) then
 					status = true
 				else
 					status, obtainedData = false, get_blueprint()
@@ -965,10 +1004,12 @@ local function InPlayerData(meta, Key)
 				dispatch(record.key, "OnDataError", "Error happened while trying to obtain data, trying to obtain data from backup...")
 
 				local preStatus, backupData = call_backup(backup)
+				local dataResult = if preStatus then backupData else get_blueprint()
 
 				if not __DataCache[record.key] then
-					__DataCache[record.key] = if preStatus then backupData else get_blueprint()
+					__DataCache[record.key] = dataResult
 				end
+				local _, _, _ = write_data(data, record.key, dataResult) -- this will rewrite the main datastore when backup un/obtained the data
 
 				status, obtainedData = preStatus, backupData
 			else
@@ -976,7 +1017,7 @@ local function InPlayerData(meta, Key)
 			end
 			
 			if ExclusivePlayer and obtainedData then
-				if ensure_exc_player(ExclusivePlayer) then
+				if ensure_exc_player(record.key, ExclusivePlayer) then
 					status = true
 				else
 					status, obtainedData = false, get_blueprint()
@@ -1274,8 +1315,7 @@ function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configuratio
 	self.WALMaxEntries = 50
 	self.BackupDataSuffix = "_backup"
 	self.ExclusiveAccessEnabled = true
-	self.ExclusiveAccessAttempts = 5
-	self.ExclusiveAccessExpiration = 24 -- 1 day = 24 hours
+	self.ExclusiveAccessExpiration = 1 -- 1 Day
 	self.SwappingEnabled = true
 	self.CacheFlushingInterval = 5
 	self.CanDataExpired = false
