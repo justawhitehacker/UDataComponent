@@ -18,10 +18,10 @@ local __SaveTimestamp = {} -- { [Key: string] = timestamp: number }
 local __AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
 local __SaveQueue = {} -- { [Key: string] = coroutine: thread }
 local __DataCache = {} -- { [Key: string] = Data: any }
-local __BoundRegistry = {} -- { [Key: string] = PlayerId: number }
+local __BoundRegistry = {} -- { [Key: string] = table }
 local __LockSessions = ScopedMutex.new(Mutex)
 local __LockTimers = {}
-local __ShutdownCalled = false
+local __ExclusiveSafetyCalled = false
 
 export type MyDataValidationDummy = {
 	InsertPredicate: (self: MyDataValidationDummy, ThisData: any, Predicate: (ThisValue: any) -> any) -> any,
@@ -45,7 +45,7 @@ export type MyDataRecord = {
 	IsSessionLocked: (self: MyDataRecord, OwnerIdentity: string) -> boolean,
 	BindExclusiveAccess: (self: MyDataRecord, ExclusivePlayer: Player) -> boolean,
 	UnbindExclusiveAccess: (self: MyDataRecord) -> boolean,
-	IsExclusiveAccessBound: (self: MyDataRecord, ExclusivePlayer: Player) -> boolean,
+	IsExclusiveAccessBound: (self: MyDataRecord) -> boolean,
 	IsPlayerInExclusiveAccess: (self: MyDataRecord, PlayerThatAssumedExclusive: Player) -> boolean,
 	CreateValidation: (self: MyDataRecord, ValidationFunction: (ValidationDummy: MyDataValidationDummy) -> any) -> (),
 	SmartCleanCache: (self: MyDataRecord, Interval: number?) -> (),
@@ -144,6 +144,10 @@ local function InPlayerData(meta, Key)
 		
 		return newTab
 	end
+	
+	local function get_blueprint()
+		return deepclone(meta.DataBlueprint)
+	end
 
 	local function match_key(key : string, strid : string)
 		key = tostring(key)
@@ -187,7 +191,7 @@ local function InPlayerData(meta, Key)
 		local obtainedData = nil
 		
 		if not meta.BackupEnabled then
-			return false, meta.DataBlueprint
+			return false, get_blueprint()
 		end
 		
 		local _attempts = 0
@@ -209,7 +213,7 @@ local function InPlayerData(meta, Key)
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot check the record of the data from this key from backup")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to obtain data from backup, switching data to template/blueprint")
 			
-			return false, meta.DataBlueprint
+			return false, get_blueprint()
 		end
 		
 		return true, obtainedData
@@ -325,6 +329,8 @@ local function InPlayerData(meta, Key)
 						record:ReleaseLockSession(ownerId)						
 						break
 					end
+					
+					task.wait(1)
 				end
 				
 				__LockTimers[ownerId] = nil
@@ -395,7 +401,46 @@ local function InPlayerData(meta, Key)
 			return true
 		end
 		
-		return not predicate(thisValue)
+		return predicate(thisValue)
+	end
+	
+	local function create_exclusive_safety(key)
+		Players.PlayerRemoving:Connect(function(player)
+			for key, bound in pairs(__BoundRegistry) do
+				if bound.UserId == player.UserId then
+					
+				end
+			end
+		end)
+		
+		game:BindToClose(function()
+			for key, bound in pairs(__BoundRegistry) do
+				
+			end
+		end)
+	end
+	
+	local function bind_exclusive_access(key, timeSinceBound, player : Player)
+		if not meta.ExclusiveAccessEnabled then return end
+		if not player then return end
+		
+		if __BoundRegistry[key] then
+			return
+		end
+		
+		__BoundRegistry[key] = {
+			UserId = player.UserId,
+			Since = timeSinceBound
+		}
+		
+		if not __ExclusiveSafetyCalled then
+			__ExclusiveSafetyCalled = true
+			create_exclusive_safety(key)
+		end
+	end
+	
+	local function unbind_exclusive_access(key)
+		
 	end
 	
 	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
@@ -415,7 +460,7 @@ local function InPlayerData(meta, Key)
 				if ensure_exc_player(ExclusivePlayer) then
 					return true, obtainedData
 				else
-					return false, obtainedData
+					return false, get_blueprint()
 				end
 			end
 			
@@ -456,7 +501,7 @@ local function InPlayerData(meta, Key)
 			local status, backupData = call_backup(currentBackupData)
 			
 			if not __DataCache[record.key] then
-				__DataCache[record.key] = if status then backupData else table.clone(meta.DataBlueprint)
+				__DataCache[record.key] = if status then backupData else get_blueprint()
 			end
 
 			return status, backupData
@@ -467,7 +512,7 @@ local function InPlayerData(meta, Key)
 			if ensure_exc_player(ExclusivePlayer) then
 				status, data = true, obtainedData
 			else
-				status, data = false, meta.DataBlueprint
+				status, data = false, get_blueprint()
 			end
 			
 			if not __DataCache[record.key] then
@@ -487,7 +532,7 @@ local function InPlayerData(meta, Key)
 		if not __AutosaveTimestamp[record.key] then
 			__AutosaveTimestamp[record.key] = coroutine.create(call_autosave)
 			
-			coroutine.resume(__AutosaveTimestamp[record.key], currentData, currentWALData, currentBackupData)
+			coroutine.resume(__AutosaveTimestamp[record.key], record.key, currentData, currentWALData, currentBackupData)
 		end
 		
 		return true, obtainedData
@@ -572,11 +617,7 @@ local function InPlayerData(meta, Key)
 		local rejected = {}
 		for thisData in pairs(before) do
 			if resultFunction[thisData] == nil then
-				if is_data_valid(thisData, nil) then
-					__DataCache[record.key][thisData] = nil
-				else
-					table.insert(rejected, thisData)
-				end
+				__DataCache[record.key][thisData] = nil
 			end
 		end
 		
@@ -692,6 +733,7 @@ local function InPlayerData(meta, Key)
 		__GetTimestamp[record.key] = nil
 		__SaveQueue[record.key] = nil
 		__DataCache[record.key] = nil
+		__AutosaveTimestamp[record.key] = nil
 		
 		dispatch(record.key, "OnDataRemoved", clone)
 		return true, "success"
@@ -741,8 +783,7 @@ local function InPlayerData(meta, Key)
 		if not status then
 			if message == "wal_disabled" then
 				write_data(data, record.key, __DataCache[record.key])
-				write_data(backup, record.key, __DataCache[record.key])
-				dispatch(record.key, "OnDataSaved", clone)
+				write_backup(backup, record.key, __DataCache[record.key])
 
 				return true
 			end
@@ -786,11 +827,7 @@ local function InPlayerData(meta, Key)
 		local rejected = {}
 		for thisData in pairs(before) do
 			if resultFunction[thisData] == nil then
-				if is_data_valid(thisData, nil) then
-					__DataCache[record.key][thisData] = nil
-				else
-					table.insert(rejected, thisData)
-				end
+				__DataCache[record.key][thisData] = nil
 			end
 		end
 
@@ -813,7 +850,7 @@ local function InPlayerData(meta, Key)
 		if not status then
 			if message == "wal_disabled" then
 				write_data(data, record.key, filteredData)
-				write_data(backup, record.key, filteredData)
+				write_backup(backup, record.key, filteredData)
 				
 				dispatch(record.key, "OnDataSaved", clone)
 
@@ -839,7 +876,7 @@ local function InPlayerData(meta, Key)
 
 		local attempts = LoadAttempts or meta.DefaultDataLoadingAttempts or 5
 		local yieldTime = YieldTime or meta.DefaultDataLoadingYieldDuration or 3
-
+		
 		local status = false
 		local obtainedData = nil
 		
@@ -851,7 +888,7 @@ local function InPlayerData(meta, Key)
 				if ensure_exc_player(ExclusivePlayer) then
 					status = true
 				else
-					status, obtainedData = false, meta.DataBlueprint
+					status, obtainedData = false, get_blueprint()
 				end
 			else
 				status = true
@@ -896,7 +933,7 @@ local function InPlayerData(meta, Key)
 				local preStatus, backupData = call_backup(backup)
 
 				if not __DataCache[record.key] then
-					__DataCache[record.key] = if preStatus then backupData else table.clone(meta.DataBlueprint)
+					__DataCache[record.key] = if preStatus then backupData else get_blueprint()
 				end
 
 				status, obtainedData = preStatus, backupData
@@ -908,7 +945,7 @@ local function InPlayerData(meta, Key)
 				if ensure_exc_player(ExclusivePlayer) then
 					status = true
 				else
-					status, obtainedData = false, meta.DataBlueprint
+					status, obtainedData = false, get_blueprint()
 				end
 			end
 		end)
@@ -920,7 +957,7 @@ local function InPlayerData(meta, Key)
 		if not __AutosaveTimestamp[record.key] then
 			__AutosaveTimestamp[record.key] = coroutine.create(call_autosave)
 
-			coroutine.resume(__AutosaveTimestamp[record.key], data, wal, backup)
+			coroutine.resume(__AutosaveTimestamp[record.key], record.key, data, wal, backup)
 		end
 		
 		local clone = deepclone(obtainedData)
@@ -979,8 +1016,60 @@ local function InPlayerData(meta, Key)
 		return true
 	end
 	
-	function record:SafeWrite(Data: any, WritingFunction: (CurrentData: any) -> any, LoadAttempts: number?, SetAttempts: number?, YieldTime: number?)
+	function record:SafeWrite(WritingFunction: (CurrentData: any) -> any)
+		local now = workspace:GetServerTimeNow()
+		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
+		__SaveTimestamp[record.key] = now
 		
+		dispatch(record.key, "OnDataSaving")
+		
+		if not __DataCache[record.key] then
+			return false
+		end
+		
+		local wal = meta._CurrentWALDataStore
+		local data = meta._CurrentDataStore
+		local backup = meta._CurrentBackupDataStore
+		
+		local before = __DataCache[record.key]
+		local clone = deepclone(before)
+		local resultFunction = WritingFunction(clone)
+
+		if type(resultFunction) ~= "table" then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Write function must returns the/a table of param.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Write function isn't returning the table of param.")
+
+			return false
+		end
+
+		local rejected = {}
+		for thisData in pairs(before) do
+			if resultFunction[thisData] == nil then
+				__DataCache[record.key][thisData] = nil
+			end
+		end
+
+		for thisData, thisValue in pairs(resultFunction) do
+			if is_data_valid(thisData, thisValue) then
+				__DataCache[record.key][thisData] = thisValue
+			else
+				table.insert(rejected, thisData)
+			end
+		end
+
+		if #rejected > 0 then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
+		end
+		
+		if not __SaveQueue[record.key] then
+			__SaveQueue[record.key] = coroutine.create(create_safe_saving_record)
+			
+			coroutine.resume(__SaveQueue[record.key], record.key, wal, data, backup)
+			dispatch(record.key, "OnDataCached", __DataCache[record.key])
+		end
+		
+		return true
 	end
 	
 	function record:AcquireLockSession(OwnerIdentity: string?, Timeout: number?)
@@ -990,6 +1079,7 @@ local function InPlayerData(meta, Key)
 		
 		local isSuccess = __LockSessions:Acquire(OwnerIdentity)
 		if not isSuccess then
+			__LockSessions:Release(OwnerIdentity)
 			return false, nil
 		end
 		
@@ -1002,9 +1092,10 @@ local function InPlayerData(meta, Key)
 		if timer then
 			coroutine.close(timer)
 			__LockTimers[OwnerIdentity] = nil
-			
-			__LockSessions:Release(OwnerIdentity)
 		end
+		
+		__LockSessions:Release(OwnerIdentity)
+		return true
 	end
 	
 	function record:IsSessionLocked(OwnerIdentity: string)
@@ -1012,19 +1103,84 @@ local function InPlayerData(meta, Key)
 	end
 	
 	function record:BindExclusiveAccess(ExclusivePlayer: Player)
+		if not meta.ExclusiveAccessEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
+			return false
+		end
 		
+		local id = ExclusivePlayer.UserId
+		local data = deepclone(__DataCache[record.key])
+		local now = workspace:GetServerTimeNow()
+		
+		if data.__bounds == nil then
+			record:SafeWrite(function(CurrentData)
+				CurrentData.__bounds = {}
+				
+				CurrentData.__bounds.id = id
+				CurrentData.__bounds.since = now
+				
+				return CurrentData
+			end)
+			
+			if __BoundRegistry[record.key] == nil then
+				bind_exclusive_access(record.key, now, ExclusivePlayer)
+			end			
+			
+			dispatch(record.key, "OnDataBinding", data)
+			
+			return true
+		end
+		
+		dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is already bound to " .. data.__bounds.id .. "")
+		return false
 	end
 	
 	function record:UnbindExclusiveAccess()
+		if not meta.ExclusiveAccessEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
+			return false
+		end
 		
+		local data = deepclone(__DataCache[record.key])
+		
+		if data.__bounds == nil or __BoundRegistry[record.key] == nil then 
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is not bound to any player.")
+			return false
+		end
+		
+		record:SafeWrite(function(CurrentData)
+			CurrentData.__bounds = nil
+			
+			return CurrentData
+		end)		
+		
+		unbind_exclusive_access(record.key)
+		dispatch(record.key, "OnDataUnbinding", data)
+		
+		return true
 	end
 	
-	function record:IsExclusiveAccessBound(ExclusivePlayer: Player)
+	function record:IsExclusiveAccessBound()
+		if not meta.ExclusiveAccessEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
+			return false
+		end
 		
+		local data = deepclone(__DataCache[record.key])
+		
+		return data.__bounds ~= nil and __BoundRegistry[record.key] ~= nil
 	end
 	
 	function record:IsPlayerInExclusiveAccess(PlayerThatAssumedExclusive: Player)
+		if not meta.ExclusiveAccessEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
+			return false
+		end
 		
+		local data = deepclone(__DataCache[record.key])
+		local id = PlayerThatAssumedExclusive.UserId
+		
+		return data.__bounds ~= nil and data.__bounds.id == id and __BoundRegistry[record.key] ~= nil and __BoundRegistry[record.key].UserId == id
 	end
 	
 	function record:CreateValidation(ValidationFunction: (PredicateDummy: MyDataValidationDummy) -> any)
