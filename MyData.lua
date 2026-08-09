@@ -16,19 +16,28 @@ local ScopedMutex = require(__sc)
 local __GetTimestamp = {} -- { [Key: string] = timestamp: number }
 local __SaveTimestamp = {} -- { [Key: string] = timestamp: number }
 local __AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
-local __SavePendingQueue = {} -- { [Key: string] = data }
+local __SavePendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup, IsSafe } }
 local __DataCache = {} -- { [Key: string] = Data: any }
 local __BoundRegistry = {} -- { [Key: string] = table }
 local __LockSessions = ScopedMutex.new(Mutex)
 local __LockTimers = {}
+
+local __ExclusiveTimerCalled = false
 local __AutosaveDied = false
 local __ExclusiveSafetyCalled = false
 local __IsRunning = false
 
 export type MyDataValidationDummy = {
+	-- Inserting a predication of data whereas the data can be written when the predicate fulfilled
 	InsertPredicate: (self: MyDataValidationDummy, ThisData: any, Predicate: (ThisValue: any) -> any) -> any,
 	RemovePredicate: (self: MyDataValidationDummy, ThisData: any) -> any,
-}
+	
+	InsertClamp: (self: MyDataValidationDummy, ThisData: any, Min: number, Max: number) -> any,
+	RemoveClamp: (self: MyDataValidationDummy, ThisData: any) -> any,
+	
+	InsertSchema: (self: MyDataValidationDummy, ThisData: any, Type: string) -> any,
+	RemoveSchema: (self: MyDataValidationDummy, ThisData: any) -> any
+} 
 
 export type MyDataRecord = {
 	Get: (self: MyDataRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?) -> any,
@@ -161,38 +170,46 @@ local function InPlayerData(meta, Key)
 		
 		local id = tonumber(strid)
 		if id == nil then
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to get the ID of player while trying to check the exlusive binding.")
 			return false
 		end
-		
+				
 		local bound = __BoundRegistry[key]
 		if not bound then
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed because the data wasn't bound with this player.")
 			return false
 		end
-		
+				
 		local boundId, since = bound.UserId, bound.Since
 		if not id or not since then
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to get ID or time since bound from this player.")
 			return false
 		end
-		
-		return id == boundId and now - id < timeout
+						
+		return id == boundId and now - since < timeout
 	end
 
-	local function match_key(key : string, strid : string)
-		key = tostring(key)
+	local function match_key(oriKey, strid : string)
+		local key = tostring(oriKey)
 		strid = tostring(strid)
 		
 		if key == "" or strid == "" then
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Empty key or id is not allowed.")
 			return false
 		end
 		
-		local startpos, endpos = string.find(key, strid, 1, true)
-		if startpos == nil or endpos == nil then return false end
+		local startpos, endpos = string.find(strid, key, 1, true)
+		if startpos == nil or endpos == nil then 
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to match key with id.")
+			return false 
+		end
 		
 		local obtainedId = string.sub(key, startpos, endpos)
-		if obtainedId == strid and is_still_exclusive(key, strid) then
+		if obtainedId == strid and is_still_exclusive(oriKey, strid) then
 			return true
 		end
 		
+		dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: The data of this key isn't bound with this player.")
 		return false
 	end
 	
@@ -200,17 +217,17 @@ local function InPlayerData(meta, Key)
 		assert(typeof(player) == "Instance" and player:IsA("Player"))
 		
 		if not meta.ExclusiveAccessEnabled then
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Exclusive access is disabled.")
 			return false
 		end
 		
 		if RunService:IsClient() then
 			warn("[" .. meta.ErrorReasonNamespace .. "]: Currently trying to set player as exclusive, named " .. player.Name ..  ", but called from clientt.")
-			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Currently trying to set player as exclusive, named " .. player.Name ..  ", but called from client.")
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Currently trying to set player as exclusive, named " .. player.Name ..  ", but called from client.")
 			return false
 		end
 		
-		local id = player.UserId 		
-		local strid = tostring(id)
+		local strid = tostring(player.UserId)
 		
 		return match_key(key, strid)
 	end
@@ -219,6 +236,7 @@ local function InPlayerData(meta, Key)
 		local obtainedData = nil
 		
 		if not meta.BackupEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Backup is disabled.")
 			return false, get_blueprint()
 		end
 		
@@ -248,7 +266,6 @@ local function InPlayerData(meta, Key)
 	end
 	
 	local function write_data(data : DataStore, key, currentData)
-		print("Called 1")
 		local dataSuccess, err = pcall(function()
 			return data:UpdateAsync(key, function(old)
 				return currentData				
@@ -257,19 +274,20 @@ local function InPlayerData(meta, Key)
 		
 		if not dataSuccess then
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data, reason: " .. tostring(err))
-			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data.")
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data.")
 			
 			return false, nil, "write_data_failed"
 		end
 				
 		local clone = deepclone(currentData)
-		dispatch(record.key, "OnDataSaved", clone)
+		dispatch(key, "OnDataSaved", clone)
 				
 		return true, dataSuccess, "write_data_success"
 	end
 	
 	local function write_backup(backup : DataStore, key, currentData)
 		if not meta.BackupEnabled then
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Backup is disabled.")
 			return false, nil, "backup_disabled"
 		end
 		
@@ -281,7 +299,7 @@ local function InPlayerData(meta, Key)
 		
 		if not backupSuccess then
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data to backup, reason: " .. tostring(err))
-			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data to backup.")
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data to backup.")
 			
 			return false, nil, "write_backup_failed"
 		end
@@ -291,6 +309,7 @@ local function InPlayerData(meta, Key)
 	
 	local function write_wal_optionally(wal : DataStore, data : DataStore, backup : DataStore, key, currentData)
 		if not meta.WALEnabled then
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: WAL is disabled.")
 			return false, nil, "wal_disabled"
 		end
 		
@@ -302,7 +321,7 @@ local function InPlayerData(meta, Key)
 
 		if not walSuccess then
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write WAL before actual Data, reason: " .. tostring(err))
-			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write WAL before actual Data.")
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write WAL before actual Data.")
 
 			return false, nil, "write_wal_failed"
 		end
@@ -316,7 +335,7 @@ local function InPlayerData(meta, Key)
 			end)
 		else
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data or/and Backup, WAL remained for backup, reason: " .. tostring(err))
-			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data or/and Backup, WAL remained for backup soon.")
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data or/and Backup, WAL remained for backup soon.")
 			
 			return false, nil, "write_data_orand_backup_failed"
 		end
@@ -326,12 +345,22 @@ local function InPlayerData(meta, Key)
 	
 	local function call_flush(key, data : DataStore, wal : DataStore, backup : DataStore)
 		local currentData = __DataCache[key]
-		if not currentData then return false end
+		if not currentData then 
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not loaded and cannot able to find the data record from cache.")
+			return false 
+		end
 		
 		local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
 		if codeStatus == "wal_disabled" then
 			write_data(data, key, currentData)
 			write_backup(backup, key, currentData)
+		end
+		
+		for i, pending in ipairs(__SavePendingQueue) do
+			if pending.Key == key then
+				table.remove(__SavePendingQueue, i)
+				break
+			end
 		end
 				
 		return true
@@ -400,7 +429,7 @@ local function InPlayerData(meta, Key)
 						local function commit()
 							local status, _, message = write_wal_optionally(obj.WAL, obj.Data, obj.Backup, obj.Key, currentData)
 
-							if status == "wal_disabled" then
+							if message == "wal_disabled" then
 								local _, _, _ = write_data(obj.Data, obj.Key, currentData)
 								local _, _, _ = write_backup(obj.Backup, obj.Key, currentData)
 							end
@@ -442,7 +471,9 @@ local function InPlayerData(meta, Key)
 	end
 	
 	local function is_data_valid(thisData, thisValue)
-		if not meta.ValidationEnabled then return true end
+		if not meta.ValidationEnabled then 
+			return true 
+		end
 		
 		local trackedValidations = meta._TrackedValidations and meta._TrackedValidations[record.key]
 		if not trackedValidations then return true end
@@ -455,8 +486,48 @@ local function InPlayerData(meta, Key)
 		return predicate(thisValue)
 	end
 	
+	local function is_schema_valid(thisData, thisValue)
+		if not meta.ValidationEnabled then return true end
+		
+		local trackedSchemas = meta._TrackedSchemas and meta._TrackedSchemas[record.key]
+		if not trackedSchemas then return true end
+		
+		local schema = trackedSchemas[thisData]
+		if not schema then return true end
+		
+		return typeof(thisValue) == schema
+	end
+	
+	local function clamp_value(thisData, thisValue)
+		if not meta.ValidationEnabled then return thisValue end
+		
+		local trackedClamps = meta._TrackedClamps and meta._TrackedClamps[record.key]
+		if not trackedClamps then return thisValue end
+		
+		local clampMin = trackedClamps[thisData] and trackedClamps[thisData].Min
+		local clampMax = trackedClamps[thisData] and trackedClamps[thisData].Max
+		if not clampMin or not clampMax then return thisValue end
+		
+		return math.clamp(thisValue, clampMin, clampMax)
+	end
+	
+	local function check_validation(key, thisData, thisValue)
+		if is_schema_valid(thisData, thisValue) then
+			if is_data_valid(thisData, thisValue) then
+				__DataCache[key][thisData] = clamp_value(thisData, thisValue)
+				return true
+			else
+				return false
+			end
+		end
+		
+		return false
+	end
+	
 	local function create_exclusive_safety(key)
 		Players.PlayerRemoving:Connect(function(player)
+			if __AutosaveDied then return end
+			
 			for key, bound in pairs(__BoundRegistry) do
 				if bound.UserId == player.UserId then
 					call_flush(key, meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
@@ -465,7 +536,7 @@ local function InPlayerData(meta, Key)
 			end
 			
 			for key, data in pairs(__DataCache) do
-				if data.UserId == player.UserId then
+				if typeof(data) == "table" and data.__bounds and data.__bounds.id == player.UserId then
 					__DataCache[key] = nil
 					__SavePendingQueue[key] = nil
 					__GetTimestamp[key] = nil
@@ -493,7 +564,9 @@ local function InPlayerData(meta, Key)
 	end
 	
 	local function bind_exclusive_access(key, timeSinceBound, player : Player)
-		if not meta.ExclusiveAccessEnabled then return end
+		if not meta.ExclusiveAccessEnabled then 
+			return 
+		end
 		if not player then return end
 		
 		if __BoundRegistry[key] then
@@ -513,6 +586,8 @@ local function InPlayerData(meta, Key)
 			__ExclusiveSafetyCalled = true
 			create_exclusive_safety(key)
 		end
+		
+		dispatch(key, "OnDataBinding", __DataCache[key])
 	end
 	
 	local function unbind_exclusive_access(key)
@@ -520,6 +595,32 @@ local function InPlayerData(meta, Key)
 		if not __BoundRegistry[key] then return end
 		
 		__BoundRegistry[key] = nil
+		dispatch(key, "OnDataUnbinding", __DataCache[key])
+	end
+	
+	local function run_exclusive_timer(data, wal, backup)
+		if __ExclusiveTimerCalled then return end
+		__ExclusiveTimerCalled = true
+
+		task.spawn(function()
+			while meta.Enabled and meta.ExclusiveAccessEnabled do
+				local now = workspace:GetServerTimeNow()
+
+				for key, bound in pairs(__BoundRegistry) do
+					local since = bound.Since
+
+					local dayInSec = 24 * 60 * 60
+					local timeout = dayInSec * meta.ExclusiveAccessExpiration
+
+					if now - since > timeout then
+						__DataCache[key].__bounds = nil
+						call_flush(key, data, wal, backup)
+						
+						unbind_exclusive_access(key)
+					end
+				end
+			end
+		end)
 	end
 	
 	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
@@ -539,6 +640,7 @@ local function InPlayerData(meta, Key)
 				if ensure_exc_player(record.key, ExclusivePlayer) then
 					return true, obtainedData
 				else
+					dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Get() returns blueprint/template of data, because the data is bound to another player.")
 					return false, get_blueprint()
 				end
 			end
@@ -549,7 +651,10 @@ local function InPlayerData(meta, Key)
 		end
 		
 		local now = workspace:GetServerTimeNow()
-		if __GetTimestamp[record.key] and now - __GetTimestamp[record.key] < meta.RequestTimestampCooldown then return false, nil end
+		if __GetTimestamp[record.key] and now - __GetTimestamp[record.key] < meta.RequestTimestampCooldown then 
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Get() halted, waiting for cooldown.")
+			return false, nil 
+		end
 		__GetTimestamp[record.key] = now
 		
 		if LoadRecovery then
@@ -581,12 +686,42 @@ local function InPlayerData(meta, Key)
 			local status, backupData = call_backup(currentBackupData)
 			local dataResult = if status then backupData else get_blueprint()
 			
+			if dataResult.__bounds then
+				local id = dataResult.__bounds.id
+				local since = dataResult.__bounds.since
+				
+				local dayInSec = 60 * 60 * 24
+				local days = meta.ExclusiveAccessExpiration or 1
+
+				local timeout = dayInSec * days
+
+				if workspace:GetServerTimeNow() - since < timeout then
+					local plr = Players:GetPlayerByUserId(id)
+					bind_exclusive_access(record.key, since, plr)
+				end
+			end
+			
 			if not __DataCache[record.key] then
 				__DataCache[record.key] = dataResult
 			end
 			local _, _, _ = write_data(currentData, record.key, dataResult) -- this will rewrite the main datastore when backup un/obtained the data
 
 			return status, backupData
+		else
+			if obtainedData.__bounds then
+				local id = obtainedData.__bounds.id
+				local since = obtainedData.__bounds.since
+				
+				local dayInSec = 60 * 60 * 24
+				local days = meta.ExclusiveAccessExpiration or 1
+				
+				local timeout = dayInSec * days
+				
+				if workspace:GetServerTimeNow() - since < timeout then
+					local plr = Players:GetPlayerByUserId(id)
+					bind_exclusive_access(record.key, since, plr)
+				end
+			end
 		end
 		
 		if ExclusivePlayer and obtainedData then
@@ -598,6 +733,7 @@ local function InPlayerData(meta, Key)
 			if ensure_exc_player(record.key, ExclusivePlayer) then
 				return true, obtainedData
 			else
+				dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Get() returns blueprint/template of data, because the data is bound to another player.")
 				return false, get_blueprint()
 			end
 		end
@@ -620,12 +756,16 @@ local function InPlayerData(meta, Key)
 	
 	function record:Save(Data: any, SegmentIndex: number?)
 		local now = workspace:GetServerTimeNow()
-		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then return false end
+		if __SaveTimestamp[record.key] and now - __SaveTimestamp[record.key] < meta.RequestTimestampCooldown then 
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Save() halted, waiting for cooldown.")
+			return false 
+		end
 		__SaveTimestamp[record.key] = now
 		
 		dispatch(record.key, "OnDataSaving")
 		
 		if not __DataCache[record.key] then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save data, because data is not loaded yet.")
 			return false
 		end
 		
@@ -636,17 +776,15 @@ local function InPlayerData(meta, Key)
 		local rejected = {}
 		
 		if SegmentIndex then
-			if is_data_valid(SegmentIndex, Data) then
-				__DataCache[record.key][SegmentIndex] = Data
-			else
-				table.insert(rejected, SegmentIndex)
+			local success = check_validation(record.key, SegmentIndex, Data)
+			if not success then
+				table.insert(rejected, Data)
 			end
 		else
 			for thisData, thisValue in pairs(Data) do
-				if is_data_valid(thisData, thisValue) then
-					__DataCache[record.key][thisData] = thisValue
-				else
-					table.insert(rejected, thisData)
+				local success = check_validation(record.key, thisData, thisValue)
+				if not success then
+					table.insert(rejected, thisValue)
 				end
 			end
 		end
@@ -695,10 +833,10 @@ local function InPlayerData(meta, Key)
 		end
 		
 		for thisData, thisValue in pairs(resultFunction) do
-			if is_data_valid(thisData, thisValue) then
-				__DataCache[record.key][thisData] = thisValue
-			else
-				table.insert(rejected, thisData)
+			local success = check_validation(record.key, thisData, thisValue)
+			
+			if not success then
+				table.insert(rejected, thisValue)
 			end
 		end
 		
@@ -782,7 +920,7 @@ local function InPlayerData(meta, Key)
 		if meta.ArchivationEnabled then
 			local archive = meta._CurrentArchivedDataStore
 			pcall(function()
-				archive:UpdateAsync(record.key .. "_" .. os.time(), function()
+				archive:UpdateAsync(record.key .. "_" .. workspace:GetServerTimeNow(), function()
 					return currentData
 				end)
 			end)
@@ -805,7 +943,13 @@ local function InPlayerData(meta, Key)
 		__GetTimestamp[record.key] = nil
 		__DataCache[record.key] = nil
 		__AutosaveTimestamp[record.key] = nil
-		table.remove(__SavePendingQueue, table.find(__SavePendingQueue, record.key))
+		
+		for i, pending in ipairs(__SavePendingQueue) do
+			if pending.Key == record.key then
+				table.remove(__SavePendingQueue, i)
+				break
+			end
+		end
 		
 		dispatch(record.key, "OnDataRemoved", clone)
 		return true, "success"
@@ -829,16 +973,16 @@ local function InPlayerData(meta, Key)
 		local rejected = {}
 
 		if SegmentIndex then
-			if is_data_valid(SegmentIndex, Data) then
-				__DataCache[record.key][SegmentIndex] = Data
-			else
-				table.insert(rejected, SegmentIndex)
+			local success = check_validation(record.key, SegmentIndex, Data)
+			
+			if not success then
+				table.insert(rejected, Data)
 			end
 		else
 			for thisData, thisValue in pairs(Data) do
-				if is_data_valid(thisData, thisValue) then
-					__DataCache[record.key][thisData] = thisValue
-				else
+				local success = check_validation(record.key, thisData, thisValue)
+				
+				if not success then
 					table.insert(rejected, thisData)
 				end
 			end
@@ -904,9 +1048,9 @@ local function InPlayerData(meta, Key)
 		end
 
 		for thisData, thisValue in pairs(resultFunction) do
-			if is_data_valid(thisData, thisValue) then
-				__DataCache[record.key][thisData] = thisValue
-			else
+			local success = check_validation(record.key, thisData, thisValue)
+			
+			if not success then
 				table.insert(rejected, thisData)
 			end
 		end
@@ -951,7 +1095,6 @@ local function InPlayerData(meta, Key)
 		
 		local status = false
 		local obtainedData = nil
-		local returnData = obtainedData
 		
 		if __DataCache[record.key] then
 			obtainedData = __DataCache[record.key]
@@ -1006,6 +1149,21 @@ local function InPlayerData(meta, Key)
 
 				local preStatus, backupData = call_backup(backup)
 				local dataResult = if preStatus then backupData else get_blueprint()
+				
+				if dataResult.__bounds then
+					local id = dataResult.__bounds.id
+					local since = dataResult.__bounds.since
+					
+					local dayInSec = 60 * 60 * 24
+					local days = meta.ExclusiveAccessExpiration or 1
+
+					local timeout = dayInSec * days
+
+					if workspace:GetServerTimeNow() - since < timeout then
+						local plr = Players:GetPlayerByUserId(id)
+						bind_exclusive_access(record.key, since, plr)
+					end
+				end
 
 				if not __DataCache[record.key] then
 					__DataCache[record.key] = dataResult
@@ -1014,6 +1172,21 @@ local function InPlayerData(meta, Key)
 
 				status, obtainedData = preStatus, backupData
 			else
+				if obtainedData.__bounds then
+					local id = obtainedData.__bounds.id
+					local since = obtainedData.__bounds.since
+					
+					local dayInSec = 60 * 60 * 24
+					local days = meta.ExclusiveAccessExpiration or 1
+
+					local timeout = dayInSec * days
+
+					if workspace:GetServerTimeNow() - since < timeout then
+						local plr = Players:GetPlayerByUserId(id)
+						bind_exclusive_access(record.key, since, plr)
+					end
+				end
+				
 				status = true
 			end
 			
@@ -1021,7 +1194,7 @@ local function InPlayerData(meta, Key)
 				if ensure_exc_player(record.key, ExclusivePlayer) then
 					status = true
 				else
-					status, returnData = false, get_blueprint()
+					status, obtainedData = false, get_blueprint()
 				end
 			end
 		end)
@@ -1039,7 +1212,7 @@ local function InPlayerData(meta, Key)
 		local clone = deepclone(obtainedData)
 		dispatch(record.key, "OnDataLoaded", clone)
 		
-		return status, returnData
+		return status, obtainedData
 	end
 	
 	function record:SafeSave(Data: any, SegmentIndex: number?)
@@ -1060,17 +1233,17 @@ local function InPlayerData(meta, Key)
 		local rejected = {}
 
 		if SegmentIndex then
-			if is_data_valid(SegmentIndex, Data) then
-				__DataCache[record.key][SegmentIndex] = Data
-			else
-				table.insert(rejected, SegmentIndex)
+			local success = check_validation(record.key, SegmentIndex, Data)
+			
+			if not success then
+				table.insert(rejected, Data)
 			end
 		else
 			for thisData, thisValue in pairs(Data) do
-				if is_data_valid(thisData, thisValue) then
-					__DataCache[record.key][thisData] = thisValue
-				else
-					table.insert(rejected, thisData)
+				local success = check_validation(record.key, thisData, thisValue)
+				
+				if not success then
+					table.insert(rejected, thisValue)
 				end
 			end
 		end
@@ -1119,10 +1292,10 @@ local function InPlayerData(meta, Key)
 		end
 
 		for thisData, thisValue in pairs(resultFunction) do
-			if is_data_valid(thisData, thisValue) then
-				__DataCache[record.key][thisData] = thisValue
-			else
-				table.insert(rejected, thisData)
+			local success = check_validation(record.key, thisData, thisValue)
+			
+			if not success then
+				table.insert(rejected, thisValue)
 			end
 		end
 
@@ -1189,9 +1362,7 @@ local function InPlayerData(meta, Key)
 			if __BoundRegistry[record.key] == nil then
 				bind_exclusive_access(record.key, now, ExclusivePlayer)
 			end			
-			
-			dispatch(record.key, "OnDataBinding", data)
-			
+						
 			return true
 		end
 		
@@ -1219,7 +1390,6 @@ local function InPlayerData(meta, Key)
 		end)		
 		
 		unbind_exclusive_access(record.key)
-		dispatch(record.key, "OnDataUnbinding", data)
 		
 		return true
 	end
@@ -1250,16 +1420,38 @@ local function InPlayerData(meta, Key)
 	function record:CreateValidation(ValidationFunction: (PredicateDummy: MyDataValidationDummy) -> any)
 		local dummyMethods = {}
 		local trackedValidations = meta._TrackedValidations[record.key] or {}
+		local trackedSchemas = meta._TrackedSchemas[record.key] or {}
+		local trackedClamps = meta._TrackedClamps[record.key] or {}
+		
 		meta._TrackedValidations[record.key] = trackedValidations
+		meta._TrackedSchemas[record.key] = trackedSchemas
+		meta._TrackedClamps[record.key] = trackedClamps
 		
 		local currentData = deepclone(__DataCache[record.key])
 		
+		-- Inserting a predication of data whereas the data can be written when the predicate fulfilled
 		function dummyMethods:InsertPredicate(ThisData : any, Predicate: (ThisValue: any) -> any)
 			trackedValidations[ThisData] = Predicate
 		end
 		
 		function dummyMethods:RemovePredicate(ThisData : any)
 			trackedValidations[ThisData] = nil
+		end
+		
+		function dummyMethods:InsertSchema(ThisData : any, Type: string)
+			trackedSchemas[ThisData] = Type
+		end
+		
+		function dummyMethods:RemoveSchema(ThisData : any)
+			trackedSchemas[ThisData] = nil
+		end
+		
+		function dummyMethods:InsertClamp(ThisData : any, Min: number, Max: number)
+			trackedClamps[ThisData] = {Min = Min, Max = Max}
+		end
+		
+		function dummyMethods:RemoveClamp(ThisData : any)
+			trackedClamps[ThisData] = nil
 		end
 		
 		ValidationFunction(dummyMethods)
@@ -1326,6 +1518,9 @@ function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configuratio
 	self._DataStoreName = DataStoreName
 	
 	self._TrackedValidations = {} -- { [Key] = { Member = ValidationFunction, ... } }
+	self._TrackedSchemas = {} -- { [Key] = { Member = ValidationFunction, ... } }
+	self._TrackedClamps = {} -- { [Key] = { Member = ValidationFunction, ... } }
+	
 	self._MyDataCallbacks = SDictionary.new("string", "table", {
 		OnDataLoaded = {},
 		OnDataSaved = {},
