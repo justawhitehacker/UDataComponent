@@ -560,6 +560,41 @@ local function InPlayerData(meta, Key)
 			end
 		end)
 	end
+	
+	local function unbind_exclusive_access(key)
+		if not meta.ExclusiveAccessEnabled then return end
+		if not meta._BoundRegistry[key] then return end
+
+		meta._BoundRegistry[key] = nil
+		dispatch(key, "OnDataUnbinding", meta._DataCache[key])
+	end
+	
+	local function run_exclusive_timer(data, wal, backup)
+		if meta._ExclusiveTimerCalled then return end
+		meta._ExclusiveTimerCalled = true
+
+		task.spawn(function()
+			while meta.Enabled and meta.ExclusiveAccessEnabled do
+				local now = workspace:GetServerTimeNow()
+
+				for key, bound in pairs(meta._BoundRegistry) do
+					local since = bound.Since
+
+					local dayInSec = 24 * 60 * 60
+					local timeout = dayInSec * meta.ExclusiveAccessExpiration
+
+					if now - since > timeout then
+						meta._DataCache[key].__bounds = nil
+						call_flush(key, data, wal, backup)
+
+						unbind_exclusive_access(key)
+					end
+				end
+
+				task.wait(1)
+			end
+		end)
+	end
 
 	local function bind_exclusive_access(key, timeSinceBound, player : Player)
 		if not meta.ExclusiveAccessEnabled then 
@@ -586,41 +621,7 @@ local function InPlayerData(meta, Key)
 		end
 
 		dispatch(key, "OnDataBinding", meta._DataCache[key])
-	end
-
-	local function unbind_exclusive_access(key)
-		if not meta.ExclusiveAccessEnabled then return end
-		if not meta._BoundRegistry[key] then return end
-
-		meta._BoundRegistry[key] = nil
-		dispatch(key, "OnDataUnbinding", meta._DataCache[key])
-	end
-
-	local function run_exclusive_timer(data, wal, backup)
-		if meta._ExclusiveTimerCalled then return end
-		meta._ExclusiveTimerCalled = true
-
-		task.spawn(function()
-			while meta.Enabled and meta.ExclusiveAccessEnabled do
-				local now = workspace:GetServerTimeNow()
-
-				for key, bound in pairs(meta._BoundRegistry) do
-					local since = bound.Since
-
-					local dayInSec = 24 * 60 * 60
-					local timeout = dayInSec * meta.ExclusiveAccessExpiration
-
-					if now - since > timeout then
-						meta._DataCache[key].__bounds = nil
-						call_flush(key, data, wal, backup)
-
-						unbind_exclusive_access(key)
-					end
-				end
-				
-				task.wait(1)
-			end
-		end)
+		run_exclusive_timer(meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
 	end
 
 	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
