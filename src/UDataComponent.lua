@@ -30,6 +30,7 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local MessagingService = game:GetService("MessagingService")
 local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
 
 local __sc = script.ScopedMutex
 
@@ -74,7 +75,8 @@ export type UDataComponentRecord = {
 	SmartCleanCache: (self: UDataComponentRecord, Interval: number?) -> (),
 	EndCleanCache: (self: UDataComponentRecord) -> (),
 	GetVersion: (self: UDataComponentRecord) -> number,
-	BroadcastCurrentData: (self: UDataComponentRecord) -> boolean,
+	BroadcastCurrentData: (self: UDataComponentRecord, BroadcastName: string, DetailedThings: any?) -> boolean,
+	WaitForBroadcastPacket: (self: UDataComponentRecord, BroadcastName: string) -> UDataComponentBroadcast,	
 }
 
 export type UDataComponentCallbackConnection = {
@@ -97,7 +99,9 @@ export type UDataComponentCallbackFunctions = {
 	OnDataBindExpired: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnCacheCleaned: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnReleased: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
-	OnDataError: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Reason: string) -> ()) -> UDataComponentCallbackConnection
+	OnDataError: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Reason: string) -> ()) -> UDataComponentCallbackConnection,
+	OnDataSendingBroadcast: (self: UDataComponentCallbackFunctions, Callback: (Key: string, BroadcastName: string, Broadcast: UDataComponentBroadcast) -> ()) -> UDataComponentCallbackConnection,
+	OnDataReceivingBroadcast: (self: UDataComponentCallbackFunctions, Callback: (Key: string, BroadcastName: string, Broadcast: UDataComponentBroadcast) -> ()) -> UDataComponentCallbackConnection,
 }
 
 export type UDataComponentInfo = {
@@ -1841,6 +1845,7 @@ local function InPlayerData(meta, Key)
 		end
 		
 		data = deepclone(data)
+		local name = meta.MessagingNamespace .. BroadcastName or "UDataComponent"
 		
 		local messages = {
 			Key = record.key,
@@ -1856,7 +1861,7 @@ local function InPlayerData(meta, Key)
 		end
 		
 		local success, err = pcall(function()
-			MessagingService:PublishAsync(self.MessagingNamespace .. BroadcastName, messages)
+			MessagingService:PublishAsync(name, messages)
 		end)
 		
 		if not success then
@@ -1864,7 +1869,31 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
+		dispatch(record.key, "OnDataSendingBroadcast", name, deepclone(messages))
 		return success
+	end
+	
+	function record:WaitForBroadcastPacket(BroadcastName : string) : UDataComponentBroadcast
+		local methods = {}
+		local name = meta.MessagingNamespace .. BroadcastName or "UDataComponent"
+		local success, err = pcall(function()
+			MessagingService:SubscribeAsync(name, function(message)
+				methods["Key"] = message.Data.Key
+				methods["Data"] = message.Data.Data
+				methods["BroadcasterPlaceId"] = message.Data.BroadcasterPlaceId
+				methods["BroadcasterUserId"] = message.Data.BroadcasterUserId
+				methods["BroadcastTime"] = message.Data.BroadcastTime
+				methods["Other"] = message.Data.Other
+			end)
+		end)
+		
+		if not success then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to subscribe for broadcast packets, reason: " .. tostring(err))
+			return nil
+		end
+		
+		dispatch(record.key, "OnDataReceivingBroadcast", name, deepclone(methods))
+		return methods :: UDataComponentBroadcast
 	end
 
 	return record
