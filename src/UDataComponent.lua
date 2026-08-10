@@ -69,11 +69,12 @@ export type UDataComponentRecord = {
 	IsExclusiveAccessBound: (self: UDataComponentRecord) -> boolean,
 	IsPlayerInExclusiveAccess: (self: UDataComponentRecord, PlayerThatAssumedExclusive: Player) -> boolean,
 	CreateValidation: (self: UDataComponentRecord, ValidationFunction: (ValidationDummy: UDataComponentValidationDummy) -> any) -> (),
+	Arise: (self: UDataComponentRecord) -> boolean,
 	OnConnect: (self: UDataComponentRecord) -> UDataComponentCallbackFunctions,
 	SmartCleanCache: (self: UDataComponentRecord, Interval: number?) -> (),
 	EndCleanCache: (self: UDataComponentRecord) -> (),
-	GetCommitVersion: (self: UDataComponentRecord) -> number,
-	GetCacheVersion: (self: UDataComponentRecord) -> number,
+	GetVersion: (self: UDataComponentRecord) -> number,
+	BroadcastCurrentData: (self: UDataComponentRecord) -> boolean,
 }
 
 export type UDataComponentCallbackConnection = {
@@ -131,6 +132,15 @@ export type UDataComponentInfo = {
 	MessagingNamespace : string,
 	MessagingDebugEnabled : boolean,
 	DefaultCacheCleanupInterval : number,
+}
+
+export type UDataComponentBroadcast = {
+	Key : string,
+	Data : any,
+	BroadcasterJobId : number,
+	BroadcasterUserId : number,
+	BroadcastTime : number,
+	Other : any
 }
 
 export type UDataComponent = {
@@ -1629,8 +1639,31 @@ local function InPlayerData(meta, Key)
 		ValidationFunction(dummyMethods)
 	end
 	
-	function record:GetArchivedData()
+	function record:Arise(Attempts: number?, YieldTime: number?)
+		if not meta._ArchivationEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Archiving is disabled.")
+			return false
+		end
 		
+		local att = Attempts or 10
+		local yield = YieldTime or 1
+		
+		local obtained = nil
+		local _attempts = 0
+		repeat
+			local success, err = pcall(function()
+				obtained = meta._CurrentArchivedDataStore:GetAsync(record.key)
+			end)
+			
+			if not success then
+				dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to unarchive back the destroyed data, reason: " .. tostring(err))
+				return false
+			end
+			
+			task.wait(yield or 3)
+		until _attempts >= att or obtained ~= nil
+		
+		return obtained ~= nil
 	end
 	
 	function record:OnConnect() : UDataComponentCallbackFunctions
@@ -1787,6 +1820,51 @@ local function InPlayerData(meta, Key)
 
 	function record:GetVersion()
 		return meta._DataCache[record.key].__version or 0
+	end
+	
+	function record:BroadcastCurrentData(BroadcastName : string, DetailedThings : any?)
+		if not meta.MessagingEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Messaging is disabled")
+			return false
+		end
+		
+		local data = meta._DataCache[record.key]
+		if not data then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not loaded")
+			return false
+		end
+		
+		local bounds = data.__bounds
+		if not bounds then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not binded/expired")
+			return false
+		end
+		
+		data = deepclone(data)
+		
+		local messages = {
+			Key = record.key,
+			Data = data,
+			BroadcasterPlaceId = game.JobId,
+			BroadcasterUserId = bounds.UserId,
+			BroadcastTime = workspace:GetServerTimeNow(),
+			Other = {}
+		}
+		
+		if DetailedThings then
+			table.insert(messages.Other, DetailedThings)
+		end
+		
+		local success, err = pcall(function()
+			MessagingService:PublishAsync(self.MessagingNamespace .. BroadcastName, messages)
+		end)
+		
+		if not success then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to broadcast other servers for current data, reason: " .. tostring(err))
+			return false
+		end
+		
+		return success
 	end
 
 	return record
