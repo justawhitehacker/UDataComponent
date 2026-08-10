@@ -4,7 +4,7 @@ MyData.__index = MyData
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
-local MessagingService = game:GetService("MessagingService")
+-- local MessagingService = game:GetService("MessagingService")
 local HttpService = game:GetService("HttpService")
 
 local __sc = script.ScopedMutex
@@ -14,7 +14,6 @@ local Mutex = require(__sc.Mutex)
 local ScopedMutex = require(__sc)
 
 export type MyDataValidationDummy = {
-	-- Inserting a predication of data whereas the data can be written when the predicate fulfilled
 	InsertPredicate: (self: MyDataValidationDummy, ThisData: any, Predicate: (ThisValue: any) -> any) -> any,
 	RemovePredicate: (self: MyDataValidationDummy, ThisData: any) -> any,
 
