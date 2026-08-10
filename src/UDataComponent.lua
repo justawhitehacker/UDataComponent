@@ -52,7 +52,8 @@ export type UDataComponentRecord = {
 
 export type UDataComponentCallbackConnection = {
 	Disconnect: (self: UDataComponentCallbackConnection) -> (),
-	DisconnectAfterCalled: (self: UDataComponentCallbackConnection) -> ()
+	DisconnectAfterCalled: (self: UDataComponentCallbackConnection) -> (),
+	IsConnected: (self: UDataComponentCallbackConnection) -> boolean,
 }
 
 export type UDataComponentCallbackFunctions = {
@@ -118,6 +119,7 @@ local function InPlayerData(meta, Key)
 		if not meta.CallbackEnabled then return end
 		
 		local args = table.pack(...)
+		local callbacks = meta._UDataComponentDynamicCallbacks:Get(eventName)
 
 		local suc, err = pcall(function()
 			local callbacks = meta._UDataComponentCallbacks:Get(eventName)
@@ -132,6 +134,23 @@ local function InPlayerData(meta, Key)
 
 		if not suc then
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's callback error happened, reason: " .. tostring(err))
+		end
+
+		if callbacks then
+			local callback = callbacks[key]
+			if not callback then return end
+
+			local potentials = {}
+			for id, cb in pairs(callbacks) do
+				table.insert(potentials, cb)
+			end
+
+			for _, cb in ipairs(potentials) do
+				local dysuc, dyerr = pcall(cb, key, table.unpack(args))
+				if not dysuc then 
+					warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's callback error happened, reason: " .. tostring(dyerr))
+				end
+			end
 		end
 	end
 
@@ -470,15 +489,15 @@ local function InPlayerData(meta, Key)
 		if not meta.ValidationEnabled then 
 			return true 
 		end
-
+		
 		local trackedValidations = meta._TrackedValidations and meta._TrackedValidations[record.key]
 		if not trackedValidations then return true end
-
+		
 		local predicate = trackedValidations[thisData]
 		if not predicate then
 			return true
 		end
-
+		
 		return predicate(thisValue)
 	end
 
@@ -505,18 +524,21 @@ local function InPlayerData(meta, Key)
 		
 		if typeof(thisValue) ~= "number" then return thisValue end
 		
-		local result = nil
-		if clampMin ~= nil then result = math.max(thisValue, clampMin) end
-		if clampMax ~= nil then result = math.min(thisValue, clampMax) end
-
-		return result
+		if clampMin ~= nil then return math.max(thisValue, clampMin) end
+		if clampMax ~= nil then return math.min(thisValue, clampMax) end
+		
+		if clampMin ~= nil and clampMax ~= nil then
+			return math.clamp(thisValue, clampMin, clampMax) 
+		end
+		
+		return thisValue
 	end
 	
 	local function check_validation(key, thisData, thisValue)
 		if not is_schema_valid(thisData, thisValue) then
 			return false
 		end
-		
+				
 		local value = clamp_value(thisData, thisValue)
 		
 		if not is_data_valid(thisData, value) then
@@ -1411,6 +1433,7 @@ local function InPlayerData(meta, Key)
 		end
 
 		dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is already bound to " .. data.__bounds.id .. "")
+		run_exclusive_timer(meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
 		return false
 	end
 
@@ -1507,103 +1530,95 @@ local function InPlayerData(meta, Key)
 	
 	function record:OnConnect() : UDataComponentCallbackFunctions
 		local callbackMethods = {}
-		local components = meta._UDataComponentCallbacks
+		local components = meta._UDataComponentDynamicCallbacks
 		
 		local connectorMethods = {}
 		
-		-- Connector Methods
-		function connectorMethods:Disconnect()
+		local function registerCallback(CallbackType: string, Callback: any)
+			local listener = components:Get(CallbackType) or {}
 			
-		end
-		
-		function connectorMethods:DisconnectAfterCalled()
+			listener[record.key] = listener[record.key] or {}
 			
+			local id = HttpService:GenerateGUID(false)
+			listener[record.key][id] = Callback
+			
+			local connector = {}
+			local disconnected = false
+			
+			function connector:Disconnect()
+				if disconnected then return end
+				disconnected = true
+				
+				listener[record.key][id] = nil
+			end
+			
+			function connector:DisconnectAfterCalled()
+				if disconnected then return end
+				
+				local original = Callback
+				listener[record.key][id] = function(...)
+					local ok, err = pcall(original, ...)
+					connector:Disconnect()
+					
+					if not ok then
+						error("[" .. meta.ErrorReasonNamespace .. "]: " .. err, 0)
+					end
+				end
+			end
+			
+			function connector:IsConnected()
+				return listener[record.key] and listener[record.key][id]
+			end
 		end
 		
 		-- Callback Methods
 
 		function callbackMethods:OnDataLoading(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			local loading = components:Get("OnDataLoading") or {}
-			loading[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataLoading", Callback)
 		end
 		
 		function callbackMethods:OnDataLoaded(Callback: (Key: string, CloneData: any) -> ()) : UDataComponentCallbackConnection
-			local loaded = components:Get("OnDataLoaded") or {}
-			loaded[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataLoaded", Callback)
 		end
 	
 		function callbackMethods:OnDataSaving(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			local saving = components:Get("OnDataSaving") or {}
-			saving[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataSaving", Callback)
 		end
 		
 		function callbackMethods:OnDataSaved(Callback: (Key: string, CloneData: any) -> ()) : UDataComponentCallbackConnection
-			local saved = components:Get("OnDataSaved") or {}
-			saved[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataSaved", Callback)
 		end
 		
 		function callbackMethods:OnDataArchived(Callback: (Key: string, ArchivedData: any) -> ()) : UDataComponentCallbackConnection
-			local archived = components:Get("OnDataArchived") or {}
-			archived[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataArchived", Callback)
 		end
 		
 		function callbackMethods:OnDataRecovery(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			local recovery = components:Get("OnDataRecovery") or {}
-			recovery[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataRecovery", Callback)
 		end
 		
 		function callbackMethods:OnDataCached(Callback: (Key: string, CloneData: any) -> ()) : UDataComponentCallbackConnection
-			local cached = components:Get("OnDataCached") or {}
-			cached[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataCached", Callback)
 		end
 		
 		function callbackMethods:OnDataRemoved(Callback: (Key: string, RemovedData: any) -> ()) : UDataComponentCallbackConnection
-			local removed = components:Get("OnDataRemoved") or {}
-			removed[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataRemoved", Callback)
 		end
 		
 		function callbackMethods:OnDataBinding(Callback: (Key: string, Data: any) -> ()) : UDataComponentCallbackConnection
-			local binding = components:Get("OnDataBinding") or {}
-			binding[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataBinding", Callback)
 		end
 		
 		function callbackMethods:OnDataUnbinding(Callback: (Key: string, Data: any) -> ()) : UDataComponentCallbackConnection
-			local unbinding = components:Get("OnDataUnbinding") or {}
-			unbinding[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataUnbinding", Callback)
 		end
 		
 		function callbackMethods:OnReleased(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			local released = components:Get("OnReleased") or {}
-			released[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnReleased", Callback)
 		end
 		
 		function callbackMethods:OnDataError(Callback: (Key: string, Reason: string) -> ()) : UDataComponentCallbackConnection
-			local error = components:Get("OnDataError") or {}
-			error[record.key] = Callback
-			
-			return connectorMethods :: UDataComponentCallbackConnection
+			return registerCallback("OnDataError", Callback)
 		end
 		
 		return callbackMethods
@@ -1689,6 +1704,21 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self._TrackedClamps = {} -- { [Key] = { Member = ValidationFunction, ... } }
 
 	self._UDataComponentCallbacks = SDictionary.new("string", "table", {
+		OnDataLoading = {},
+		OnDataLoaded = {},
+		OnDataSaving = {},
+		OnDataSaved = {},
+		OnDataArchived = {},
+		OnDataRecovery = {},
+		OnDataCached = {},
+		OnDataRemoved = {},
+		OnDataBinding = {},
+		OnDataUnbinding = {},
+		OnReleased = {},
+		OnDataError = {}
+	})
+	
+	self._UDataComponentDynamicCallbacks = SDictionary.new("string", "table", {
 		OnDataLoading = {},
 		OnDataLoaded = {},
 		OnDataSaving = {},
