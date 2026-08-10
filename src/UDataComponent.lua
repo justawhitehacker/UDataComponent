@@ -1,3 +1,27 @@
+-- UDataComponent
+-- A data component that can be used to store data in a way that is easy to use and manage
+
+--[[
+	SIMPLE DOCUMENTATION:
+	
+	-- Constructor --
+	UDataComponent.InDataInfo(DataStoreName: string, scope : string?) : UDataComponentInfo
+	---- Creates a new UDataComponent info object, where all handler tables constructed ----
+	
+	-- UDataComponentInfo --
+	UDataComponentInfo:GetPlayerData(Key: number | string, Callbacks: {UDataComponentCallbackFunctions?}) : UDataComponentRecord
+	---- Gets the data of a player, allows you to access player's data level
+	
+	UDataComponentInfo:GetDataStoreName() : string
+	---- Gets the current data store name ----
+	
+	UDataComponentInfo.Enabled : boolean --> Allows to UDataComponent process this data store to be loaded and saved
+	UDataComponentInfo.ValidationEnabled : boolean --> Allows to UDataComponent validate this data store before saving
+	UDataComponentInfo.CallbackEnabled : boolean --> Allows to UDataComponent listen the callbacks
+	UDataComponentInfo.RequestTimestampCooldown : number --> Minimum time between each request to the data store
+	
+--]]
+
 local UDataComponent = {}
 UDataComponent.__index = UDataComponent
 
@@ -47,6 +71,7 @@ export type UDataComponentRecord = {
 	CreateValidation: (self: UDataComponentRecord, ValidationFunction: (ValidationDummy: UDataComponentValidationDummy) -> any) -> (),
 	OnConnect: (self: UDataComponentRecord) -> UDataComponentCallbackFunctions,
 	SmartCleanCache: (self: UDataComponentRecord, Interval: number?) -> (),
+	EndCleanCache: (self: UDataComponentRecord) -> (),
 	GetCommitVersion: (self: UDataComponentRecord) -> number,
 	GetCacheVersion: (self: UDataComponentRecord) -> number,
 }
@@ -68,6 +93,8 @@ export type UDataComponentCallbackFunctions = {
 	OnDataRemoved: (self: UDataComponentCallbackFunctions, Callback: (Key: string, RemovedData: any) -> ()) -> UDataComponentCallbackConnection,
 	OnDataBinding: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Data: any) -> ()) -> UDataComponentCallbackConnection,
 	OnDataUnbinding: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Data: any) -> ()) -> UDataComponentCallbackConnection,
+	OnDataBindExpired: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
+	OnCacheCleaned: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnReleased: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnDataError: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Reason: string) -> ()) -> UDataComponentCallbackConnection
 }
@@ -94,7 +121,8 @@ export type UDataComponentInfo = {
 	ExclusiveAccessEnabled : boolean,
 	ExclusiveAccessExpiration : number,
 	SwappingEnabled : boolean,
-	CacheFlushingInterval : number,
+	CacheCleaningEnabled : boolean,
+	CacheCleaningInterval : number,
 	CanDataExpired : boolean,
 	DataExpiredDuration : number,
 	DataBlueprint : {any?},
@@ -355,6 +383,32 @@ local function InPlayerData(meta, Key)
 
 		return true, walSuccess, "write_wal_success"
 	end
+	
+	local function is_key_owner_online(key)
+		local data = meta._DataCache[key]
+		if typeof(data) ~= "table" then return false end
+		
+		if data.__bounds and data.__bounds.id then
+			return Players:GetPlayerFromCharacter(data.__bounds.id) ~= nil
+		end
+		
+		local isId = tonumber(key)
+		if isId then
+			return Players:GetPlayerByUserId(isId) ~= nil
+		end
+		
+		return true
+	end
+	
+	local function is_key_pending(key)
+		for i, pending in ipairs(meta._SavePendingQueue) do
+			if pending.Key == key then
+				return true
+			end
+		end
+		
+		return false
+	end
 
 	local function call_flush(key, data : DataStore, wal : DataStore, backup : DataStore)
 		local currentData = meta._DataCache[key]
@@ -376,6 +430,27 @@ local function InPlayerData(meta, Key)
 			end
 		end
 
+		return true
+	end
+	
+	local function call_cache_cleanup(key, interval, data : DataStore, wal : DataStore, backup : DataStore)
+		if is_key_owner_online(key) then return false end
+		if is_key_pending(key) then return false end
+		if meta._LockSessions:IsLocked(key) then return false end
+
+		local now = workspace:GetServerTimeNow()
+		local lastTouch = math.max(meta._GetTimestamp or 0, meta._SaveTimestamp or 0)
+		if now - lastTouch < interval then return false end
+
+		call_flush(key, data, wal, backup)
+		
+		meta._DataCache[key] = nil
+		meta._AutosaveTimestamp[key] = nil
+		meta._GetTimestamp[key] = nil
+		meta._SaveTimestamp[key] = nil
+		
+		dispatch(key, "OnCacheCleaned", key)
+		
 		return true
 	end
 
@@ -443,6 +518,7 @@ local function InPlayerData(meta, Key)
 							local latestData = meta._DataCache[obj.Key]
 							if not latestData then return end
 							
+							latestData.__version = (currentData.__version or 0) + 1
 							local status, _, message = write_wal_optionally(obj.WAL, obj.Data, obj.Backup, obj.Key, latestData)
 
 							if message == "wal_disabled" then
@@ -623,6 +699,7 @@ local function InPlayerData(meta, Key)
 						call_flush(key, data, wal, backup)
 
 						unbind_exclusive_access(key)
+						dispatch(key, "OnDataBindExpired")
 					end
 				end
 
@@ -671,6 +748,23 @@ local function InPlayerData(meta, Key)
 
 		if meta._DataCache[record.key] then
 			obtainedData = meta._DataCache[record.key]
+			
+			if obtainedData.__bounds then
+				local id = obtainedData.__bounds.id
+				local since = obtainedData.__bounds.since
+
+				local dayInSec = 60 * 60 * 24
+				local days = meta.ExclusiveAccessExpiration or 1
+
+				local timeout = dayInSec * days
+
+				if workspace:GetServerTimeNow() - since < timeout then
+					local plr = Players:GetPlayerByUserId(id)
+					bind_exclusive_access(record.key, since, plr)
+				else
+					dispatch(record.key, "OnDataBindExpired")
+				end
+			end
 
 			if ExclusivePlayer and obtainedData then
 				if ensure_exc_player(record.key, ExclusivePlayer) then
@@ -738,6 +832,8 @@ local function InPlayerData(meta, Key)
 				if workspace:GetServerTimeNow() - since < timeout then
 					local plr = Players:GetPlayerByUserId(id)
 					bind_exclusive_access(record.key, since, plr)
+				else
+					dispatch(record.key, "OnDataBindExpired")
 				end
 			end
 			
@@ -774,6 +870,8 @@ local function InPlayerData(meta, Key)
 			if workspace:GetServerTimeNow() - since < timeout then
 				local plr = Players:GetPlayerByUserId(id)
 				bind_exclusive_access(record.key, since, plr)
+			else
+				dispatch(record.key, "OnDataBindExpired")
 			end
 		end
 
@@ -1159,6 +1257,8 @@ local function InPlayerData(meta, Key)
 				if workspace:GetServerTimeNow() - since < timeout then
 					local plr = Players:GetPlayerByUserId(id)
 					bind_exclusive_access(record.key, since, plr)
+				else
+					dispatch(record.key, "OnDataBindExpired")
 				end
 			end
 
@@ -1228,6 +1328,8 @@ local function InPlayerData(meta, Key)
 					if workspace:GetServerTimeNow() - since < timeout then
 						local plr = Players:GetPlayerByUserId(id)
 						bind_exclusive_access(record.key, since, plr)
+					else
+						dispatch(record.key, "OnDataBindExpired")
 					end
 				end
 				local _, _, _ = write_data(data, record.key, dataResult) -- this will rewrite the main datastore when backup un/obtained the data
@@ -1253,6 +1355,8 @@ local function InPlayerData(meta, Key)
 				if workspace:GetServerTimeNow() - since < timeout then
 					local plr = Players:GetPlayerByUserId(id)
 					bind_exclusive_access(record.key, since, plr)
+				else
+					dispatch(record.key, "OnDataBindExpired")
 				end
 			end
 
@@ -1616,6 +1720,14 @@ local function InPlayerData(meta, Key)
 			return registerCallback("OnDataUnbinding", Callback)
 		end
 		
+		function callbackMethods:OnDataBindExpired(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnDataBindExpired", Callback)
+		end
+		
+		function callbackMethods:OnCacheCleaned(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnCacheCleaned", Callback)
+		end
+		
 		function callbackMethods:OnReleased(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
 			return registerCallback("OnReleased", Callback)
 		end
@@ -1628,11 +1740,53 @@ local function InPlayerData(meta, Key)
 	end
 
 	function record:SmartCleanCache(Interval: number?)
-
+		if not meta.CacheCleaningEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Cache cleaning is disabled")
+			return
+		end
+		
+		if meta._CacheCleaningCalled then return end
+		meta._CacheCleaningCalled = true
+		
+		local data = meta._CurrentDataStore
+		local wal = meta._CurrentWALDataStore
+		local backup = meta._CurrentBackupDataStore
+		
+		local inv = Interval or meta.CacheCleaningInterval or 300
+		
+		meta._CacheCleaningThread = task.spawn(function()
+			while meta.Enabled do
+				local checkKeys = {}
+				for key in pairs(meta._DataCache) do
+					table.insert(checkKeys, key)
+				end
+				
+				for _, key in ipairs(checkKeys) do
+					if not meta._BoundRegistry[key] then
+						call_cache_cleanup(key, inv, data, wal, backup)
+					end
+				end
+				
+				task.wait(inv)
+			end
+		end)
+	end
+	
+	function record:EndCacheCleaning()
+		if not meta.CacheCleaningEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Cache cleaning is disabled")
+			return
+		end
+		
+		if not meta._CacheCleaningCalled then return end
+		meta._CacheCleaningCalled = false
+		
+		task.cancel(meta._CacheCleaningThread)
+		meta._CacheCleaningThread = nil
 	end
 
 	function record:GetVersion()
-
+		return meta._DataCache[record.key].__version or 0
 	end
 
 	return record
@@ -1669,7 +1823,8 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self.ExclusiveAccessEnabled = true
 	self.ExclusiveAccessExpiration = 1 -- 1 Day
 	self.SwappingEnabled = true
-	self.CacheFlushingInterval = 5
+	self.CacheCleaningEnabled = true
+	self.CacheCleaningInterval = 300
 	self.CanDataExpired = false
 	self.DataExpiredDuration = 300
 	self.DataBlueprint = {}
@@ -1701,11 +1856,14 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self._AutosaveDied = false
 	self._ExclusiveSafetyCalled = false
 	self._IsRunning = false
+	self._CacheCleaningCalled = false
+	
+	self._CacheCleaningThread = nil
 
 	self._TrackedValidations = {} -- { [Key] = { Member = ValidationFunction, ... } }
 	self._TrackedSchemas = {} -- { [Key] = { Member = ValidationFunction, ... } }
 	self._TrackedClamps = {} -- { [Key] = { Member = ValidationFunction, ... } }
-
+	
 	self._UDataComponentCallbacks = SDictionary.new("string", "table", {
 		OnDataLoading = {},
 		OnDataLoaded = {},
@@ -1717,6 +1875,8 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataRemoved = {},
 		OnDataBinding = {},
 		OnDataUnbinding = {},
+		OnDataBindExpired = {},
+		OnCacheCleaned = {},
 		OnReleased = {},
 		OnDataError = {}
 	})
@@ -1732,6 +1892,8 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataRemoved = {},
 		OnDataBinding = {},
 		OnDataUnbinding = {},
+		OnDataBindExpired = {},
+		OnCacheCleaned = {},
 		OnReleased = {},
 		OnDataError = {}
 	})
