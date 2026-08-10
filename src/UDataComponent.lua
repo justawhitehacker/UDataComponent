@@ -57,18 +57,18 @@ export type UDataComponentCallbackConnection = {
 }
 
 export type UDataComponentCallbackFunctions = {
-	OnDataLoading: (Key: string) -> UDataComponentCallbackConnection,
-	OnDataLoaded: (Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
-	OnDataSaving: (Key: string) -> UDataComponentCallbackConnection,
-	OnDataSaved: (Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
-	OnDataArchived: (Key: string, ArchivedData: any) -> UDataComponentCallbackConnection,
-	OnDataRecovery: (Key: string) -> UDataComponentCallbackConnection,
-	OnDataCached: (Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
-	OnDataRemoved: (Key: string, RemovedData: any) -> UDataComponentCallbackConnection,
-	OnDataBinding: (Key: string, Data: any) -> UDataComponentCallbackConnection,
-	OnDataUnbinding: (Key: string, Data: any) -> UDataComponentCallbackConnection,
-	OnReleased: (Key: string) -> UDataComponentCallbackConnection,
-	OnDataError: (Key: string, Reason: string) -> UDataComponentCallbackConnection
+	OnDataLoading: (self: UDataComponentCallbackFunctions, Key: string) -> UDataComponentCallbackConnection,
+	OnDataLoaded: (self: UDataComponentCallbackFunctions, Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
+	OnDataSaving: (self: UDataComponentCallbackFunctions, Key: string) -> UDataComponentCallbackConnection,
+	OnDataSaved: (self: UDataComponentCallbackFunctions, Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
+	OnDataArchived: (self: UDataComponentCallbackFunctions, Key: string, ArchivedData: any) -> UDataComponentCallbackConnection,
+	OnDataRecovery: (self: UDataComponentCallbackFunctions, Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
+	OnDataCached: (self: UDataComponentCallbackFunctions, Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
+	OnDataRemoved: (self: UDataComponentCallbackFunctions, Key: string, RemovedData: any) -> UDataComponentCallbackConnection,
+	OnDataBinding: (self: UDataComponentCallbackFunctions, Key: string, Data: any) -> UDataComponentCallbackConnection,
+	OnDataUnbinding: (self: UDataComponentCallbackFunctions, Key: string, Data: any) -> UDataComponentCallbackConnection,
+	OnReleased: (self: UDataComponentCallbackFunctions, Key: string) -> UDataComponentCallbackConnection,
+	OnDataError: (self: UDataComponentCallbackFunctions, Key: string, Reason: string) -> UDataComponentCallbackConnection
 }
 
 export type UDataComponentInfo = {
@@ -141,7 +141,7 @@ local function InPlayerData(meta, Key)
 			if not callback then return end
 
 			local potentials = {}
-			for id, cb in pairs(callbacks) do
+			for id, cb in pairs(callback) do
 				table.insert(potentials, cb)
 			end
 
@@ -1569,6 +1569,8 @@ local function InPlayerData(meta, Key)
 			function connector:IsConnected()
 				return listener[record.key] and listener[record.key][id]
 			end
+			
+			return connector
 		end
 		
 		-- Callback Methods
