@@ -4,7 +4,7 @@ MyData.__index = MyData
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
--- local MessagingService = game:GetService("MessagingService")
+-- local MessagingService = game:GetService("MessagingService") Coming Soon!
 local HttpService = game:GetService("HttpService")
 
 local __sc = script.ScopedMutex
