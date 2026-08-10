@@ -45,6 +45,7 @@ export type UDataComponentRecord = {
 	IsExclusiveAccessBound: (self: UDataComponentRecord) -> boolean,
 	IsPlayerInExclusiveAccess: (self: UDataComponentRecord, PlayerThatAssumedExclusive: Player) -> boolean,
 	CreateValidation: (self: UDataComponentRecord, ValidationFunction: (ValidationDummy: UDataComponentValidationDummy) -> any) -> (),
+	OnConnect: (self: UDataComponentRecord) -> UDataComponentCallbackFunctions,
 	SmartCleanCache: (self: UDataComponentRecord, Interval: number?) -> (),
 	GetVersion: (self: UDataComponentRecord) -> number
 }
@@ -511,28 +512,6 @@ local function InPlayerData(meta, Key)
 		return result
 	end
 	
-	local function min_value(thisData, thisValue)
-		if not meta.ValidationEnabled then return thisValue end
-		
-		local trackedMin = meta._TrackedMin and meta._TrackedMin[record.key] and meta._TrackedMin[record.key][thisData]
-		if not trackedMin then return thisValue end
-		
-		if typeof(thisValue) ~= "number" then return thisValue end
-		
-		return math.min(thisValue, trackedMin)
-	end
-	
-	local function max_value(thisData, thisValue)
-		if not meta.ValidationEnabled then return thisValue end
-		
-		local trackedMax = meta._TrackedMax and meta._TrackedMax[record.key] and meta._TrackedMax[record.key][thisData]
-		if not trackedMax then return thisValue end
-		
-		if typeof(thisValue) ~= "number" then return thisValue end
-		
-		return math.max(thisValue, trackedMax)
-	end
-
 	local function check_validation(key, thisData, thisValue)
 		if not is_schema_valid(thisData, thisValue) then
 			return false
@@ -756,6 +735,10 @@ local function InPlayerData(meta, Key)
 			return status, backupData
 		end
 		
+		if not meta._DataCache[record.key] then
+			meta._DataCache[record.key] = obtainedData
+		end		
+		
 		if obtainedData.__bounds then
 			local id = obtainedData.__bounds.id
 			local since = obtainedData.__bounds.since
@@ -772,11 +755,6 @@ local function InPlayerData(meta, Key)
 		end
 
 		if ExclusivePlayer and obtainedData then
-			if not meta._DataCache[record.key] then
-				meta._DataCache[record.key] = obtainedData
-			end
-
-			local status, data
 			if ensure_exc_player(record.key, ExclusivePlayer) then
 				return true, obtainedData
 			else
@@ -787,10 +765,6 @@ local function InPlayerData(meta, Key)
 
 		local clone = deepclone(obtainedData)
 		dispatch(record.key, "OnDataLoaded", clone)
-
-		if not meta._DataCache[record.key] then
-			meta._DataCache[record.key] = obtainedData
-		end		
 
 		if not meta._AutosaveTimestamp[record.key] then
 			meta._AutosaveTimestamp[record.key] = coroutine.create(call_autosave)
@@ -1149,6 +1123,21 @@ local function InPlayerData(meta, Key)
 		if meta._DataCache[record.key] then
 			obtainedData = meta._DataCache[record.key]
 			local clone = deepclone(meta._DataCache[record.key])
+			
+			if obtainedData.__bounds then
+				local id = obtainedData.__bounds.id
+				local since = obtainedData.__bounds.since
+
+				local dayInSec = 60 * 60 * 24
+				local days = meta.ExclusiveAccessExpiration or 1
+
+				local timeout = dayInSec * days
+
+				if workspace:GetServerTimeNow() - since < timeout then
+					local plr = Players:GetPlayerByUserId(id)
+					bind_exclusive_access(record.key, since, plr)
+				end
+			end
 
 			if ExclusivePlayer then
 				if ensure_exc_player(record.key, ExclusivePlayer) then
@@ -1224,6 +1213,25 @@ local function InPlayerData(meta, Key)
 			else
 				status = true
 			end
+			
+			if not meta._DataCache[record.key] then
+				meta._DataCache[record.key] = obtainedData
+			end	
+
+			if obtainedData.__bounds then
+				local id = obtainedData.__bounds.id
+				local since = obtainedData.__bounds.since
+
+				local dayInSec = 60 * 60 * 24
+				local days = meta.ExclusiveAccessExpiration or 1
+
+				local timeout = dayInSec * days
+
+				if workspace:GetServerTimeNow() - since < timeout then
+					local plr = Players:GetPlayerByUserId(id)
+					bind_exclusive_access(record.key, since, plr)
+				end
+			end
 
 			if ExclusivePlayer and obtainedData then
 				if ensure_exc_player(record.key, ExclusivePlayer) then
@@ -1232,28 +1240,8 @@ local function InPlayerData(meta, Key)
 					status, obtainedData = false, get_blueprint()
 				end
 			end
-		end)
-
-		if not meta._DataCache[record.key] then
-			meta._DataCache[record.key] = obtainedData
-		end		
+		end)	
 		
-		if obtainedData.__bounds then
-			local id = obtainedData.__bounds.id
-			local since = obtainedData.__bounds.since
-
-			local dayInSec = 60 * 60 * 24
-			local days = meta.ExclusiveAccessExpiration or 1
-
-			local timeout = dayInSec * days
-
-			if workspace:GetServerTimeNow() - since < timeout then
-				local plr = Players:GetPlayerByUserId(id)
-				bind_exclusive_access(record.key, since, plr)
-			end
-		end
-
-
 		if not meta._AutosaveTimestamp[record.key] then
 			meta._AutosaveTimestamp[record.key] = coroutine.create(call_autosave)
 
