@@ -47,7 +47,8 @@ export type UDataComponentRecord = {
 	CreateValidation: (self: UDataComponentRecord, ValidationFunction: (ValidationDummy: UDataComponentValidationDummy) -> any) -> (),
 	OnConnect: (self: UDataComponentRecord) -> UDataComponentCallbackFunctions,
 	SmartCleanCache: (self: UDataComponentRecord, Interval: number?) -> (),
-	GetVersion: (self: UDataComponentRecord) -> number
+	GetCommitVersion: (self: UDataComponentRecord) -> number,
+	GetCacheVersion: (self: UDataComponentRecord) -> number,
 }
 
 export type UDataComponentCallbackConnection = {
@@ -57,18 +58,18 @@ export type UDataComponentCallbackConnection = {
 }
 
 export type UDataComponentCallbackFunctions = {
-	OnDataLoading: (self: UDataComponentCallbackFunctions, Key: string) -> UDataComponentCallbackConnection,
-	OnDataLoaded: (self: UDataComponentCallbackFunctions, Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
-	OnDataSaving: (self: UDataComponentCallbackFunctions, Key: string) -> UDataComponentCallbackConnection,
-	OnDataSaved: (self: UDataComponentCallbackFunctions, Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
-	OnDataArchived: (self: UDataComponentCallbackFunctions, Key: string, ArchivedData: any) -> UDataComponentCallbackConnection,
-	OnDataRecovery: (self: UDataComponentCallbackFunctions, Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
-	OnDataCached: (self: UDataComponentCallbackFunctions, Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
-	OnDataRemoved: (self: UDataComponentCallbackFunctions, Key: string, RemovedData: any) -> UDataComponentCallbackConnection,
-	OnDataBinding: (self: UDataComponentCallbackFunctions, Key: string, Data: any) -> UDataComponentCallbackConnection,
-	OnDataUnbinding: (self: UDataComponentCallbackFunctions, Key: string, Data: any) -> UDataComponentCallbackConnection,
-	OnReleased: (self: UDataComponentCallbackFunctions, Key: string) -> UDataComponentCallbackConnection,
-	OnDataError: (self: UDataComponentCallbackFunctions, Key: string, Reason: string) -> UDataComponentCallbackConnection
+	OnDataLoading: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
+	OnDataLoaded: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
+	OnDataSaving: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
+	OnDataSaved: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
+	OnDataArchived: (self: UDataComponentCallbackFunctions, Callback: (Key: string, ArchivedData: any) -> ()) -> UDataComponentCallbackConnection,
+	OnDataRecovery: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
+	OnDataCached: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
+	OnDataRemoved: (self: UDataComponentCallbackFunctions, Callback: (Key: string, RemovedData: any) -> ()) -> UDataComponentCallbackConnection,
+	OnDataBinding: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Data: any) -> ()) -> UDataComponentCallbackConnection,
+	OnDataUnbinding: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Data: any) -> ()) -> UDataComponentCallbackConnection,
+	OnReleased: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
+	OnDataError: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Reason: string) -> ()) -> UDataComponentCallbackConnection
 }
 
 export type UDataComponentInfo = {
