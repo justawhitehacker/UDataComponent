@@ -4,7 +4,7 @@ UDataComponent.__index = UDataComponent
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
--- local MessagingService = game:GetService("MessagingService") Coming soon!.
+local MessagingService = game:GetService("MessagingService")
 local HttpService = game:GetService("HttpService")
 
 local __sc = script.ScopedMutex
@@ -14,17 +14,12 @@ local Mutex = require(__sc.Mutex)
 local ScopedMutex = require(__sc)
 
 export type UDataComponentValidationDummy = {
+	-- Inserting a predication of data whereas the data can be written when the predicate fulfilled
 	InsertPredicate: (self: UDataComponentValidationDummy, ThisData: any, Predicate: (ThisValue: any) -> any) -> any,
 	RemovePredicate: (self: UDataComponentValidationDummy, ThisData: any) -> any,
 
-	InsertClamp: (self: UDataComponentValidationDummy, ThisData: any, Min: number, Max: number) -> any,
+	InsertClamp: (self: UDataComponentValidationDummy, ThisData: any, Min: number?, Max: number?) -> any,
 	RemoveClamp: (self: UDataComponentValidationDummy, ThisData: any) -> any,
-	
-	InsertMin: (self: UDataComponentValidationDummy, ThisData: any, Min: number) -> any,
-	RemoveMin: (self: UDataComponentValidationDummy, ThisData: any) -> any,
-	
-	InsertMax: (self: UDataComponentValidationDummy, ThisData: any, Max: number) -> any,
-	RemoveMax: (self: UDataComponentValidationDummy, ThisData: any) -> any, 
 
 	InsertSchema: (self: UDataComponentValidationDummy, ThisData: any, Type: string) -> any,
 	RemoveSchema: (self: UDataComponentValidationDummy, ThisData: any) -> any
@@ -54,19 +49,24 @@ export type UDataComponentRecord = {
 	GetVersion: (self: UDataComponentRecord) -> number
 }
 
+export type UDataComponentCallbackConnection = {
+	Disconnect: (self: UDataComponentCallbackConnection) -> (),
+	DisconnectAfterCalled: (self: UDataComponentCallbackConnection) -> ()
+}
+
 export type UDataComponentCallbackFunctions = {
-	OnDataLoading: (Key: string) -> (),
-	OnDataLoaded: (Key: string, CurrentData: any) -> (),
-	OnDataSaving: (Key: string) -> (),
-	OnDataSaved: (Key: string, CurrentData: any) -> (),
-	OnDataArchived: (Key: string, ArchivedData: any) -> (),
-	OnDataRecovery: (Key: string) -> (),
-	OnDataCached: (Key: string, CurrentData: any) -> (),
-	OnDataRemoved: (Key: string, RemovedData: any) -> (),
-	OnDataBinding: (Key: string, Data: any) -> (),
-	OnDataUnbinding: (Key: string, Data: any) -> (),
-	OnReleased: (Key: string) -> (),
-	OnDataError: (Key: string, Reason: string) -> ()
+	OnDataLoading: (Key: string) -> UDataComponentCallbackConnection,
+	OnDataLoaded: (Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
+	OnDataSaving: (Key: string) -> UDataComponentCallbackConnection,
+	OnDataSaved: (Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
+	OnDataArchived: (Key: string, ArchivedData: any) -> UDataComponentCallbackConnection,
+	OnDataRecovery: (Key: string) -> UDataComponentCallbackConnection,
+	OnDataCached: (Key: string, CurrentData: any) -> UDataComponentCallbackConnection,
+	OnDataRemoved: (Key: string, RemovedData: any) -> UDataComponentCallbackConnection,
+	OnDataBinding: (Key: string, Data: any) -> UDataComponentCallbackConnection,
+	OnDataUnbinding: (Key: string, Data: any) -> UDataComponentCallbackConnection,
+	OnReleased: (Key: string) -> UDataComponentCallbackConnection,
+	OnDataError: (Key: string, Reason: string) -> UDataComponentCallbackConnection
 }
 
 export type UDataComponentInfo = {
@@ -114,6 +114,8 @@ local function InPlayerData(meta, Key)
 	record.key = Key
 
 	local function dispatch(key, eventName, ...)
+		if not meta.CallbackEnabled then return end
+		
 		local args = table.pack(...)
 
 		local suc, err = pcall(function()
@@ -123,7 +125,7 @@ local function InPlayerData(meta, Key)
 				local callback = callbacks[key]
 				if not callback then return end
 
-				callback(table.unpack(args))
+				callback(key, table.unpack(args))
 			end
 		end)
 
@@ -499,11 +501,14 @@ local function InPlayerData(meta, Key)
 
 		local clampMin = trackedClamps[thisData] and trackedClamps[thisData].Min
 		local clampMax = trackedClamps[thisData] and trackedClamps[thisData].Max
-		if not clampMin or not clampMax then return thisValue end
 		
 		if typeof(thisValue) ~= "number" then return thisValue end
+		
+		local result = nil
+		if clampMin ~= nil then result = math.max(thisValue, clampMin) end
+		if clampMax ~= nil then result = math.min(thisValue, clampMax) end
 
-		return math.clamp(thisValue, clampMin, clampMax)
+		return result
 	end
 	
 	local function min_value(thisData, thisValue)
@@ -535,12 +540,12 @@ local function InPlayerData(meta, Key)
 		
 		local value = clamp_value(thisData, thisValue)
 		
-		if not is_data_valid(thisData, thisValue) then
+		if not is_data_valid(thisData, value) then
 			return false
 		end
 		
 		meta._DataCache[key][thisData] = value
-		return false
+		return true
 	end
 
 	local function create_exclusive_safety(key)
@@ -557,7 +562,14 @@ local function InPlayerData(meta, Key)
 			for key, data in pairs(meta._DataCache) do
 				if typeof(data) == "table" and data.__bounds and data.__bounds.id == player.UserId then
 					meta._DataCache[key] = nil
-					meta._SavePendingQueue[key] = nil
+					
+					for i, pending in ipairs(meta._SavePendingQueue) do
+						if pending.Key == key then
+							table.remove(meta._SavePendingQueue, i)
+							break
+						end
+					end
+					
 					meta._GetTimestamp[key] = nil
 					meta._SaveTimestamp[key] = nil
 					meta._AutosaveTimestamp[key] = nil
@@ -726,9 +738,37 @@ local function InPlayerData(meta, Key)
 					bind_exclusive_access(record.key, since, plr)
 				end
 			end
+			
+			if ExclusivePlayer and dataResult then
+				if not meta._DataCache[record.key] then
+					meta._DataCache[record.key] = dataResult
+				end
+
+				if ensure_exc_player(record.key, ExclusivePlayer) then
+					status = true
+				else
+					dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Get() returns blueprint/template of data, because the data is bound to another player.")
+					status, dataResult = false, get_blueprint()
+				end
+			end
 			local _, _, _ = write_data(currentData, record.key, dataResult) -- this will rewrite the main datastore when backup un/obtained the data
 
 			return status, backupData
+		end
+		
+		if obtainedData.__bounds then
+			local id = obtainedData.__bounds.id
+			local since = obtainedData.__bounds.since
+
+			local dayInSec = 60 * 60 * 24
+			local days = meta.ExclusiveAccessExpiration or 1
+
+			local timeout = dayInSec * days
+
+			if workspace:GetServerTimeNow() - since < timeout then
+				local plr = Players:GetPlayerByUserId(id)
+				bind_exclusive_access(record.key, since, plr)
+			end
 		end
 
 		if ExclusivePlayer and obtainedData then
@@ -751,21 +791,6 @@ local function InPlayerData(meta, Key)
 		if not meta._DataCache[record.key] then
 			meta._DataCache[record.key] = obtainedData
 		end		
-		
-		if obtainedData.__bounds then
-			local id = obtainedData.__bounds.id
-			local since = obtainedData.__bounds.since
-
-			local dayInSec = 60 * 60 * 24
-			local days = meta.ExclusiveAccessExpiration or 1
-
-			local timeout = dayInSec * days
-
-			if workspace:GetServerTimeNow() - since < timeout then
-				local plr = Players:GetPlayerByUserId(id)
-				bind_exclusive_access(record.key, since, plr)
-			end
-		end
 
 		if not meta._AutosaveTimestamp[record.key] then
 			meta._AutosaveTimestamp[record.key] = coroutine.create(call_autosave)
@@ -968,10 +993,6 @@ local function InPlayerData(meta, Key)
 		meta._TrackedClamps[record.key] = nil
 		meta._TrackedSchemas[record.key] = nil
 		meta._TrackedValidations[record.key] = nil
-		
-		meta._IsRunning = false
-		meta._ExclusiveSafetyCalled = false
-		meta._ExclusiveTimerCalled = false
 
 		for i, pending in ipairs(meta._SavePendingQueue) do
 			if pending.Key == record.key then
@@ -1481,7 +1502,7 @@ local function InPlayerData(meta, Key)
 			trackedSchemas[ThisData] = nil
 		end
 
-		function dummyMethods:InsertClamp(ThisData : any, Min: number, Max: number)
+		function dummyMethods:InsertClamp(ThisData : any, Min: number?, Max: number?)
 			trackedClamps[ThisData] = {Min = Min, Max = Max}
 		end
 
@@ -1490,6 +1511,114 @@ local function InPlayerData(meta, Key)
 		end
 
 		ValidationFunction(dummyMethods)
+	end
+	
+	function record:GetArchivedData()
+		
+	end
+	
+	function record:OnConnect() : UDataComponentCallbackFunctions
+		local callbackMethods = {}
+		local components = meta._UDataComponentCallbacks
+		
+		local connectorMethods = {}
+		
+		-- Connector Methods
+		function connectorMethods:Disconnect()
+			
+		end
+		
+		function connectorMethods:DisconnectAfterCalled()
+			
+		end
+		
+		-- Callback Methods
+
+		function callbackMethods:OnDataLoading(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
+			local loading = components:Get("OnDataLoading") or {}
+			loading[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnDataLoaded(Callback: (Key: string, CloneData: any) -> ()) : UDataComponentCallbackConnection
+			local loaded = components:Get("OnDataLoaded") or {}
+			loaded[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+	
+		function callbackMethods:OnDataSaving(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
+			local saving = components:Get("OnDataSaving") or {}
+			saving[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnDataSaved(Callback: (Key: string, CloneData: any) -> ()) : UDataComponentCallbackConnection
+			local saved = components:Get("OnDataSaved") or {}
+			saved[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnDataArchived(Callback: (Key: string, ArchivedData: any) -> ()) : UDataComponentCallbackConnection
+			local archived = components:Get("OnDataArchived") or {}
+			archived[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnDataRecovery(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
+			local recovery = components:Get("OnDataRecovery") or {}
+			recovery[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnDataCached(Callback: (Key: string, CloneData: any) -> ()) : UDataComponentCallbackConnection
+			local cached = components:Get("OnDataCached") or {}
+			cached[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnDataRemoved(Callback: (Key: string, RemovedData: any) -> ()) : UDataComponentCallbackConnection
+			local removed = components:Get("OnDataRemoved") or {}
+			removed[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnDataBinding(Callback: (Key: string, Data: any) -> ()) : UDataComponentCallbackConnection
+			local binding = components:Get("OnDataBinding") or {}
+			binding[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnDataUnbinding(Callback: (Key: string, Data: any) -> ()) : UDataComponentCallbackConnection
+			local unbinding = components:Get("OnDataUnbinding") or {}
+			unbinding[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnReleased(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
+			local released = components:Get("OnReleased") or {}
+			released[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		function callbackMethods:OnDataError(Callback: (Key: string, Reason: string) -> ()) : UDataComponentCallbackConnection
+			local error = components:Get("OnDataError") or {}
+			error[record.key] = Callback
+			
+			return connectorMethods :: UDataComponentCallbackConnection
+		end
+		
+		return callbackMethods
 	end
 
 	function record:SmartCleanCache(Interval: number?)
@@ -1512,6 +1641,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 
 	self.Enabled = true
 	self.ValidationEnabled = true
+	self.CallbackEnabled = true
 	self.RequestTimestampCooldown = 2
 	self.DefaultSavingDataCountdown = 30
 	self.DefaultDataLoadingAttempts = 5
@@ -1571,8 +1701,12 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self._TrackedClamps = {} -- { [Key] = { Member = ValidationFunction, ... } }
 
 	self._UDataComponentCallbacks = SDictionary.new("string", "table", {
+		OnDataLoading = {},
 		OnDataLoaded = {},
+		OnDataSaving = {},
 		OnDataSaved = {},
+		OnDataArchived = {},
+		OnDataRecovery = {},
 		OnDataCached = {},
 		OnDataRemoved = {},
 		OnDataBinding = {},
