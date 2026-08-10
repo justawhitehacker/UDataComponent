@@ -1,10 +1,10 @@
-local MyData = {}
-MyData.__index = MyData
+local UDataComponent = {}
+UDataComponent.__index = UDataComponent
 
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
--- local MessagingService = game:GetService("MessagingService") Coming Soon!
+-- local MessagingService = game:GetService("MessagingService") Coming soon!.
 local HttpService = game:GetService("HttpService")
 
 local __sc = script.ScopedMutex
@@ -13,48 +13,48 @@ local SDictionary = require(script.SDictionary)
 local Mutex = require(__sc.Mutex)
 local ScopedMutex = require(__sc)
 
-export type MyDataValidationDummy = {
-	InsertPredicate: (self: MyDataValidationDummy, ThisData: any, Predicate: (ThisValue: any) -> any) -> any,
-	RemovePredicate: (self: MyDataValidationDummy, ThisData: any) -> any,
+export type UDataComponentValidationDummy = {
+	InsertPredicate: (self: UDataComponentValidationDummy, ThisData: any, Predicate: (ThisValue: any) -> any) -> any,
+	RemovePredicate: (self: UDataComponentValidationDummy, ThisData: any) -> any,
 
-	InsertClamp: (self: MyDataValidationDummy, ThisData: any, Min: number, Max: number) -> any,
-	RemoveClamp: (self: MyDataValidationDummy, ThisData: any) -> any,
+	InsertClamp: (self: UDataComponentValidationDummy, ThisData: any, Min: number, Max: number) -> any,
+	RemoveClamp: (self: UDataComponentValidationDummy, ThisData: any) -> any,
 	
-	InsertMin: (self: MyDataValidationDummy, ThisData: any, Min: number) -> any,
-	RemoveMin: (self: MyDataValidationDummy, ThisData: any) -> any,
+	InsertMin: (self: UDataComponentValidationDummy, ThisData: any, Min: number) -> any,
+	RemoveMin: (self: UDataComponentValidationDummy, ThisData: any) -> any,
 	
-	InsertMax: (self: MyDataValidationDummy, ThisData: any, Max: number) -> any,
-	RemoveMax: (self: MyDataValidationDummy, ThisData: any) -> any, 
+	InsertMax: (self: UDataComponentValidationDummy, ThisData: any, Max: number) -> any,
+	RemoveMax: (self: UDataComponentValidationDummy, ThisData: any) -> any, 
 
-	InsertSchema: (self: MyDataValidationDummy, ThisData: any, Type: string) -> any,
-	RemoveSchema: (self: MyDataValidationDummy, ThisData: any) -> any
+	InsertSchema: (self: UDataComponentValidationDummy, ThisData: any, Type: string) -> any,
+	RemoveSchema: (self: UDataComponentValidationDummy, ThisData: any) -> any
 } 
 
-export type MyDataRecord = {
-	Get: (self: MyDataRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?) -> any,
-	Save: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
-	Write: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any) -> (),
-	Flush: (self: MyDataRecord) -> (),
-	Recover: (self: MyDataRecord) -> boolean,
-	Detach : (self: MyDataRecord) -> (),
-	ForceSave: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
-	ForceWrite: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any) -> (),
-	SafeGet: (self: MyDataRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> any,
-	SafeSave: (self: MyDataRecord, Data: any, SegmentIndex: number?) -> (),
-	SafeWrite: (self: MyDataRecord, WritingFunction: (CurrentData: any) -> any) -> (),
-	AcquireLockSession: (self: MyDataRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, number), 
-	ReleaseLockSession: (self: MyDataRecord, OwnerIdentity: string) -> (),
-	IsSessionLocked: (self: MyDataRecord, OwnerIdentity: string) -> boolean,
-	BindExclusiveAccess: (self: MyDataRecord, ExclusivePlayer: Player) -> boolean,
-	UnbindExclusiveAccess: (self: MyDataRecord) -> boolean,
-	IsExclusiveAccessBound: (self: MyDataRecord) -> boolean,
-	IsPlayerInExclusiveAccess: (self: MyDataRecord, PlayerThatAssumedExclusive: Player) -> boolean,
-	CreateValidation: (self: MyDataRecord, ValidationFunction: (ValidationDummy: MyDataValidationDummy) -> any) -> (),
-	SmartCleanCache: (self: MyDataRecord, Interval: number?) -> (),
-	GetVersion: (self: MyDataRecord) -> number
+export type UDataComponentRecord = {
+	Get: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?) -> any,
+	Save: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
+	Write: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> (),
+	Flush: (self: UDataComponentRecord) -> (),
+	Recover: (self: UDataComponentRecord) -> boolean,
+	Detach : (self: UDataComponentRecord) -> (),
+	ForceSave: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
+	ForceWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> (),
+	SafeGet: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> any,
+	SafeSave: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
+	SafeWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> (),
+	AcquireLockSession: (self: UDataComponentRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, number), 
+	ReleaseLockSession: (self: UDataComponentRecord, OwnerIdentity: string) -> (),
+	IsSessionLocked: (self: UDataComponentRecord, OwnerIdentity: string) -> boolean,
+	BindExclusiveAccess: (self: UDataComponentRecord, ExclusivePlayer: Player) -> boolean,
+	UnbindExclusiveAccess: (self: UDataComponentRecord) -> boolean,
+	IsExclusiveAccessBound: (self: UDataComponentRecord) -> boolean,
+	IsPlayerInExclusiveAccess: (self: UDataComponentRecord, PlayerThatAssumedExclusive: Player) -> boolean,
+	CreateValidation: (self: UDataComponentRecord, ValidationFunction: (ValidationDummy: UDataComponentValidationDummy) -> any) -> (),
+	SmartCleanCache: (self: UDataComponentRecord, Interval: number?) -> (),
+	GetVersion: (self: UDataComponentRecord) -> number
 }
 
-export type MyDataCallbackFunctions = {
+export type UDataComponentCallbackFunctions = {
 	OnDataLoading: (Key: string) -> (),
 	OnDataLoaded: (Key: string, CurrentData: any) -> (),
 	OnDataSaving: (Key: string) -> (),
@@ -69,9 +69,9 @@ export type MyDataCallbackFunctions = {
 	OnDataError: (Key: string, Reason: string) -> ()
 }
 
-export type MyDataInfo = {
-	GetPlayerData: (self: MyDataInfo, Key: string | number, Callbacks: {MyDataCallbackFunctions?}) -> MyDataRecord,
-	GetDataStoreName: (self: MyDataInfo) -> string | number,
+export type UDataComponentInfo = {
+	GetPlayerData: (self: UDataComponentInfo, Key: string | number, Callbacks: {UDataComponentCallbackFunctions?}) -> UDataComponentRecord,
+	GetDataStoreName: (self: UDataComponentInfo) -> string | number,
 
 	Enabled : boolean,
 	RequestTimestampLimit : number,
@@ -102,12 +102,12 @@ export type MyDataInfo = {
 	DefaultCacheCleanupInterval : number,
 }
 
-export type MyData = {
-	InDataInfo: (DataStoreName: string, Scope: string?) -> MyDataInfo,
+export type UDataComponent = {
+	InDataInfo: (DataStoreName: string, Scope: string?) -> UDataComponentInfo,
 }
 
 local function InPlayerData(meta, Key)
-	assert(typeof(meta) == "table", "InPlayerData must be called from a MyDataInfo object")
+	assert(typeof(meta) == "table", "InPlayerData must be called from a UDataComponentInfo object")
 	assert(typeof(Key) == "string" or typeof(Key) == "number", "Key must be a string or id")
 
 	local record = {}
@@ -117,7 +117,7 @@ local function InPlayerData(meta, Key)
 		local args = table.pack(...)
 
 		local suc, err = pcall(function()
-			local callbacks = meta._MyDataCallbacks:Get(eventName)
+			local callbacks = meta._UDataComponentCallbacks:Get(eventName)
 
 			if callbacks then
 				local callback = callbacks[key]
@@ -128,7 +128,7 @@ local function InPlayerData(meta, Key)
 		end)
 
 		if not suc then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's callback error happened, reason: " .. tostring(err))
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's callback error happened, reason: " .. tostring(err))
 		end
 	end
 
@@ -237,7 +237,7 @@ local function InPlayerData(meta, Key)
 			end)
 
 			if not suc then
-				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Get error happened, reason: " .. tostring(err))
+				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Get error happened, reason: " .. tostring(err))
 				dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to obtain data from backup, trying to get data again...")
 			end
 
@@ -246,7 +246,7 @@ local function InPlayerData(meta, Key)
 		until _attempts >= meta.DefaultDataLoadingAttempts or obtainedData ~= nil
 
 		if obtainedData == nil then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot check the record of the data from this key from backup")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot check the record of the data from this key from backup")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to obtain data from backup, switching data to template/blueprint")
 
 			return false, get_blueprint()
@@ -263,7 +263,7 @@ local function InPlayerData(meta, Key)
 		end)
 
 		if not dataSuccess then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data, reason: " .. tostring(err))
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent unable to write Data, reason: " .. tostring(err))
 			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data.")
 
 			return false, nil, "write_data_failed"
@@ -288,7 +288,7 @@ local function InPlayerData(meta, Key)
 		end)
 
 		if not backupSuccess then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data to backup, reason: " .. tostring(err))
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent unable to write Data to backup, reason: " .. tostring(err))
 			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data to backup.")
 
 			return false, nil, "write_backup_failed"
@@ -310,7 +310,7 @@ local function InPlayerData(meta, Key)
 		end)
 
 		if not walSuccess then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write WAL before actual Data, reason: " .. tostring(err))
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent unable to write WAL before actual Data, reason: " .. tostring(err))
 			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write WAL before actual Data.")
 
 			return false, nil, "write_wal_failed"
@@ -324,7 +324,7 @@ local function InPlayerData(meta, Key)
 				wal:RemoveAsync(key)
 			end)
 		else
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData unable to write Data or/and Backup, WAL remained for backup, reason: " .. tostring(err))
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent unable to write Data or/and Backup, WAL remained for backup, reason: " .. tostring(err))
 			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data or/and Backup, WAL remained for backup soon.")
 
 			return false, nil, "write_data_orand_backup_failed"
@@ -505,6 +505,28 @@ local function InPlayerData(meta, Key)
 
 		return math.clamp(thisValue, clampMin, clampMax)
 	end
+	
+	local function min_value(thisData, thisValue)
+		if not meta.ValidationEnabled then return thisValue end
+		
+		local trackedMin = meta._TrackedMin and meta._TrackedMin[record.key] and meta._TrackedMin[record.key][thisData]
+		if not trackedMin then return thisValue end
+		
+		if typeof(thisValue) ~= "number" then return thisValue end
+		
+		return math.min(thisValue, trackedMin)
+	end
+	
+	local function max_value(thisData, thisValue)
+		if not meta.ValidationEnabled then return thisValue end
+		
+		local trackedMax = meta._TrackedMax and meta._TrackedMax[record.key] and meta._TrackedMax[record.key][thisData]
+		if not trackedMax then return thisValue end
+		
+		if typeof(thisValue) ~= "number" then return thisValue end
+		
+		return math.max(thisValue, trackedMax)
+	end
 
 	local function check_validation(key, thisData, thisValue)
 		if not is_schema_valid(thisData, thisValue) then
@@ -671,7 +693,7 @@ local function InPlayerData(meta, Key)
 			end)
 
 			if not suc then
-				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Get error happened, reason: " .. tostring(err))
+				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Get error happened, reason: " .. tostring(err))
 				dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: happened in Get's function, caused by failed to obtain data, trying to get data again...")		
 			end
 
@@ -680,7 +702,7 @@ local function InPlayerData(meta, Key)
 		until _attempts >= meta.DefaultDataLoadingAttempts or obtainedData ~= nil
 
 		if obtainedData == nil then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot obtain the record of the data from this key, trying to get data from backup")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot obtain the record of the data from this key, trying to get data from backup")
 			dispatch(record.key, "OnDataError", "Error happened while trying to obtain data, trying to obtain data from backup...")
 
 			local status, backupData = call_backup(currentBackupData)
@@ -765,7 +787,7 @@ local function InPlayerData(meta, Key)
 		dispatch(record.key, "OnDataSaving")
 
 		if not meta._DataCache[record.key] then
-			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save data, because data is not loaded yet.")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save data, because data is not loaded yet.")
 			return false
 		end
 
@@ -790,7 +812,7 @@ local function InPlayerData(meta, Key)
 		end
 
 		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
 
@@ -819,7 +841,7 @@ local function InPlayerData(meta, Key)
 		local resultFunction = WritingFunction(clone)
 
 		if type(resultFunction) ~= "table" then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Write function must returns the/a table of param.")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Write function must returns the/a table of param.")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Write function isn't returning the table of param.")
 
 			return false
@@ -841,7 +863,7 @@ local function InPlayerData(meta, Key)
 		end
 
 		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
 
@@ -996,7 +1018,7 @@ local function InPlayerData(meta, Key)
 		end
 
 		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
 
@@ -1041,7 +1063,7 @@ local function InPlayerData(meta, Key)
 		local resultFunction = WritingFunction(clone)
 
 		if type(resultFunction) ~= "table" then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Write function must returns the/a table of param.")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Write function must returns the/a table of param.")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Write function isn't returning the table of param.")
 
 			return false
@@ -1063,7 +1085,7 @@ local function InPlayerData(meta, Key)
 		end
 
 		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
 
@@ -1151,7 +1173,7 @@ local function InPlayerData(meta, Key)
 			until _attempts >= attempts or obtainedData ~= nil
 
 			if obtainedData == nil then
-				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot obtain the record of the data from this key, trying to get data from backup")
+				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot obtain the record of the data from this key, trying to get data from backup")
 				dispatch(record.key, "OnDataError", "Error happened while trying to obtain data, trying to obtain data from backup...")
 
 				local preStatus, backupData = call_backup(backup)
@@ -1257,7 +1279,7 @@ local function InPlayerData(meta, Key)
 		end
 
 		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
 
@@ -1286,7 +1308,7 @@ local function InPlayerData(meta, Key)
 		local resultFunction = WritingFunction(clone)
 
 		if type(resultFunction) ~= "table" then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData's Write function must returns the/a table of param.")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Write function must returns the/a table of param.")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Write function isn't returning the table of param.")
 
 			return false
@@ -1308,7 +1330,7 @@ local function InPlayerData(meta, Key)
 		end
 
 		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " MyData cannot save some of datas, because those are not valid.")
+			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
 
@@ -1430,7 +1452,7 @@ local function InPlayerData(meta, Key)
 		return data.__bounds ~= nil and data.__bounds.id == id and meta._BoundRegistry[record.key] ~= nil and meta._BoundRegistry[record.key].UserId == id
 	end
 
-	function record:CreateValidation(ValidationFunction: (PredicateDummy: MyDataValidationDummy) -> any)
+	function record:CreateValidation(ValidationFunction: (PredicateDummy: UDataComponentValidationDummy) -> any)
 		local dummyMethods = {}
 		local trackedValidations = meta._TrackedValidations[record.key] or {}
 		local trackedSchemas = meta._TrackedSchemas[record.key] or {}
@@ -1481,10 +1503,10 @@ local function InPlayerData(meta, Key)
 	return record
 end
 
-function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configurations : {any?}) : MyDataInfo
+function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Configurations : {any?}) : UDataComponentInfo
 	local _scope = Scope or "global"
 
-	local self = setmetatable({}, MyData)
+	local self = setmetatable({}, UDataComponent)
 
 	self._DataPredicates = SDictionary.new("string", "table", {}) -- { [Key] = predicateFunction }
 
@@ -1515,9 +1537,9 @@ function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configuratio
 	self.CanDataExpired = false
 	self.DataExpiredDuration = 300
 	self.DataBlueprint = {}
-	self.ErrorReasonNamespace = "MyData"
+	self.ErrorReasonNamespace = "UDataComponent"
 	self.MessagingEnabled = false
-	self.MessagingNamespace = "MyDataReplication"
+	self.MessagingNamespace = "UDataComponentReplication"
 	self.ArchivationEnabled = true
 	self.ArchivationSuffix = "_archive"
 	self.MessagingDebugEnabled = false
@@ -1548,7 +1570,7 @@ function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configuratio
 	self._TrackedSchemas = {} -- { [Key] = { Member = ValidationFunction, ... } }
 	self._TrackedClamps = {} -- { [Key] = { Member = ValidationFunction, ... } }
 
-	self._MyDataCallbacks = SDictionary.new("string", "table", {
+	self._UDataComponentCallbacks = SDictionary.new("string", "table", {
 		OnDataLoaded = {},
 		OnDataSaved = {},
 		OnDataCached = {},
@@ -1568,10 +1590,10 @@ function MyData.InDataInfo(DataStoreName : string, Scope : string?, Configuratio
 	return self
 end
 
-function MyData:GetPlayerData(Key : string | number, Callbacks : {MyDataCallbackFunctions?}) : MyDataRecord
+function UDataComponent:GetPlayerData(Key : string | number, Callbacks : {UDataComponentCallbackFunctions?}) : UDataComponentRecord
 	if Callbacks then
 		for key, value in pairs(Callbacks) do
-			local currentFunc = self._MyDataCallbacks:Get(key)
+			local currentFunc = self._UDataComponentCallbacks:Get(key)
 
 			if currentFunc then
 				currentFunc[Key] = value
@@ -1579,11 +1601,11 @@ function MyData:GetPlayerData(Key : string | number, Callbacks : {MyDataCallback
 		end
 	end
 
-	return InPlayerData(self, Key) :: MyDataRecord
+	return InPlayerData(self, Key) :: UDataComponentRecord
 end
 
-function MyData:GetDataStoreName() : string
+function UDataComponent:GetDataStoreName() : string
 	return self._DataStoreName
 end
 
-return MyData :: MyData
+return UDataComponent :: UDataComponent
