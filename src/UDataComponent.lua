@@ -30,7 +30,6 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local MessagingService = game:GetService("MessagingService")
 local HttpService = game:GetService("HttpService")
-local TeleportService = game:GetService("TeleportService")
 
 local __sc = script.ScopedMutex
 
@@ -77,6 +76,9 @@ export type UDataComponentRecord = {
 	GetVersion: (self: UDataComponentRecord) -> number,
 	BroadcastCurrentData: (self: UDataComponentRecord, BroadcastName: string, DetailedThings: any?) -> boolean,
 	WaitForBroadcastPacket: (self: UDataComponentRecord, BroadcastName: string) -> UDataComponentBroadcast,	
+	SendLocalBroadcast: (self: UDataComponentRecord, LocalBroadcastName: string, Password: string, DetailedThings: any?) -> boolean,
+	ListenToLocalBroadcast: (self: UDataComponentCallbackFunctions, LocalBroadcastName: string, Password: string, Callback: (Key: string, BroadcastData: UDataComponentBroadcast) -> ()) -> (),
+	CloseLocalBroadcastListener: (self: UDataComponentCallbackFunctions, LocalBroadcastName: string, Password: string) -> (),
 }
 
 export type UDataComponentCallbackConnection = {
@@ -109,15 +111,20 @@ export type UDataComponentInfo = {
 	GetDataStoreName: (self: UDataComponentInfo) -> string | number,
 
 	Enabled : boolean,
-	RequestTimestampLimit : number,
+	ValidationEnabled : boolean,
+	CallbackEnabled : boolean,
+	RequestTimestampCooldown : number,
 	WALEnabled : boolean,
 	WritingDataAgeEnabled : boolean,
+	DefaultDataLoadingAttempts : number,
+	DefaultDataLoadingYieldDuration : number,
 	DefaultSaveAttempts : number,
 	DefaultYieldAttempts : number,
 	MaxKeyLength : number,
 	BackupEnabled : boolean,
+	BackupYieldDuration : number,
 	StrictlyUnallowDetaching : boolean,
-	BackupRemovedWhenDetached : boolean,
+	bBackupRemovedWhenDetached : boolean,
 	AutoSaveEnabled : boolean,
 	AutoSaveInterval : number,
 	WALDataSuffix : string,
@@ -134,8 +141,12 @@ export type UDataComponentInfo = {
 	ErrorReasonNamespace : string,
 	MessagingEnabled : boolean,
 	MessagingNamespace : string,
+	MessagingCooldown : number,
+	ArchivationEnabled : boolean,
+	ArchivationSuffix : string,
 	MessagingDebugEnabled : boolean,
 	DefaultCacheCleanupInterval : number,
+	MaxDataSavingPerTick : number,
 }
 
 export type UDataComponentBroadcast = {
@@ -195,6 +206,22 @@ local function InPlayerData(meta, Key)
 				end
 			end
 		end
+	end
+	
+	local function encrypt(text, key)
+		if text == "" or key == "" then
+			return ""
+		end
+		
+		local encrypted = {}
+		local length = #key
+		for i = 1, length do
+			local t = string.byte(text, i)
+			local k = string.byte(key, (i - 1) % length + 1)
+			encrypted[i] = string.char(bit32.bxor(t, k))
+		end
+		
+		return table.concat(encrypted)
 	end
 
 	local function deepclone(tab)
@@ -511,6 +538,27 @@ local function InPlayerData(meta, Key)
 
 			coroutine.resume(meta._LockTimers[ownerId])
 		end
+	end
+	
+	local function listen_local_broadcast(broadcastName, realName, callbackFunc)
+		if meta._LocalBroadcastListeners[broadcastName] then return end
+		
+		meta._LocalBroadcastListeners[broadcastName] = task.spawn(function()
+			while task.wait(1) do
+				local success, err = pcall(function()
+					MessagingService:SubscribeAsync(broadcastName, function(message)
+						callbackFunc(message.Data.Key, message.Data)
+					end)
+				end)
+
+				if not success then
+					dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to subscribe for broadcast packets, reason: " .. tostring(err))
+					return nil
+				end
+
+				dispatch(record.key, "OnDataReceivingBroadcast", realName, {})
+			end
+		end)
 	end
 
 	local function run_save_queue()
@@ -1840,7 +1888,7 @@ local function InPlayerData(meta, Key)
 		
 		local bounds = data.__bounds
 		if not bounds then
-			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not binded/expired")
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not binded or it's expired")
 			return false
 		end
 		
@@ -1895,6 +1943,82 @@ local function InPlayerData(meta, Key)
 		dispatch(record.key, "OnDataReceivingBroadcast", name, deepclone(methods))
 		return methods :: UDataComponentBroadcast
 	end
+	
+	function record:SendLocalBroadcast(BroadcastName : string, Password : string, DetailedThings : any?)
+		if not meta.MessagingEnabled then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Messaging is disabled")
+			return false
+		end
+		
+		local data = meta._DataCache[record.key]
+		if not data then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not loaded")
+			return false
+		end
+		
+		local bounds = data.__bounds
+		if not bounds then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not binded or it's expired")
+			return false
+		end
+		
+		data = deepclone(data)
+		local name = meta.MessagingNamespace .. BroadcastName or "UDataComponent"
+		local encryptedName = encrypt(name, Password)
+		
+		local messages = {
+			Key = record.key,
+			Data = data,
+			BroadcasterPlaceId = game.JobId,
+			BroadcasterUserId = bounds.UserId,
+			BroadcastTime = workspace:GetServerTimeNow(),
+			Other = {}
+		}
+		
+		if DetailedThings then
+			table.insert(messages.Other, DetailedThings)
+		end
+		
+		local success, err = pcall(function()
+			MessagingService:PublishAsync(encryptedName, messages)
+		end)
+		
+		if not success then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to broadcast to the targeted server, reason: " .. tostring(err))
+			return false
+		end
+		
+		dispatch(record.key, "OnDataSendingBroadcast", name, deepclone(messages))
+		return true
+	end
+	
+	function record:ListenToLocalBroadcast(BroadcastName : string, Password : string, Callback: (Key: string, BroadcastData: UDataComponentBroadcast) -> ())
+		local name = meta.MessagingNamespace .. BroadcastName or "UDataComponent"
+		local encryptedName = encrypt(name, Password)
+		
+		listen_local_broadcast(encryptedName, BroadcastName, Callback)
+	end
+	
+	function record:CloseLocalBroadcastListener(LocalBroadcastName : string, Password : string)
+		local name = meta.MessagingNamespace .. LocalBroadcastName or "UDataComponent"
+		local encryptedName = encrypt(name, Password)
+		
+		local success, err = pcall(function()
+			local listener = meta._LocalBroadcastListeners[encryptedName]
+			if listener then
+				task.cancel(listener)
+				meta._LocalBroadcastListeners[encryptedName] = nil
+			end
+		end)
+		
+		if not success then
+			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to close local broadcast listener, reason: " .. tostring(err))
+			return false
+		end
+		
+		dispatch(record.key, "OnDataLocalBroadcastListenerClosed", name)
+		return true
+	end
 
 	return record
 end
@@ -1910,7 +2034,6 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self.ValidationEnabled = true
 	self.CallbackEnabled = true
 	self.RequestTimestampCooldown = 2
-	self.DefaultSavingDataCountdown = 30
 	self.DefaultDataLoadingAttempts = 5
 	self.DefaultDataLoadingYieldDuration = 3
 	self.WALEnabled = false
@@ -1938,6 +2061,8 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self.ErrorReasonNamespace = "UDataComponent"
 	self.MessagingEnabled = false
 	self.MessagingNamespace = "UDataComponentReplication"
+	self.MessagingSendingCooldown = 5
+	self.MessagingReceivingCooldown = 5
 	self.ArchivationEnabled = true
 	self.ArchivationSuffix = "_archive"
 	self.MessagingDebugEnabled = false
@@ -1958,6 +2083,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self._BoundRegistry = {} -- { [Key: string] = table }
 	self._LockSessions = ScopedMutex.new(Mutex)
 	self._LockTimers = {}
+	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
 
 	self._ExclusiveTimerCalled = false
 	self._AutosaveDied = false
@@ -2023,6 +2149,12 @@ function UDataComponent:GetPlayerData(Key : string | number, Callbacks : {UDataC
 				currentFunc[Key] = value
 			end
 		end
+	end
+	
+	if #Key > self.MaxKeyLength then
+		warn("[ .. " .. self.ErrorReasonNamespace .. "] : Key is too long")
+		
+		Key = string.sub(Key, 1, tonumber(self.MaxKeyLength))
 	end
 
 	return InPlayerData(self, Key) :: UDataComponentRecord
