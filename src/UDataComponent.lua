@@ -102,8 +102,11 @@ export type UDataComponentCallbackFunctions = {
 	OnCacheCleaned: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnReleased: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnDataError: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Reason: string) -> ()) -> UDataComponentCallbackConnection,
-	OnDataSendingBroadcast: (self: UDataComponentCallbackFunctions, Callback: (Key: string, BroadcastName: string, Broadcast: UDataComponentBroadcast) -> ()) -> UDataComponentCallbackConnection,
-	OnDataReceivingBroadcast: (self: UDataComponentCallbackFunctions, Callback: (Key: string, BroadcastName: string, Broadcast: UDataComponentBroadcast) -> ()) -> UDataComponentCallbackConnection,
+	OnSendingBroadcast: (self: UDataComponentCallbackFunctions, Callback: (Key: string, BroadcastName: string, BroadcastData: UDataComponentBroadcast) -> ()) -> UDataComponentCallbackConnection,
+	OnReceivingBroadcast: (self: UDataComponentCallbackFunctions, Callback: (Key: string, BroadcastName: string, BroadcastData: UDataComponentBroadcast) -> ()) -> UDataComponentCallbackConnection,
+	OnLocalBroadcastListenerReady: (self: UDataComponentCallbackFunctions, Callback: (Key: string, LocalBroadcastName: string) -> ()) -> UDataComponentCallbackConnection,
+	OnLocalBroadcastListenerCalled: (self: UDataComponentCallbackFunctions, Callback: (Key: string, LocalBroadcastName: string) -> ()) -> UDataComponentCallbackConnection,
+	OnLocalBroadcastListenerClosed: (self: UDataComponentCallbackFunctions, Callback: (Key: string, LocalBroadcastName: string) -> ()) -> UDataComponentCallbackConnection
 }
 
 export type UDataComponentInfo = {
@@ -544,7 +547,8 @@ local function InPlayerData(meta, Key)
 		if meta._LocalBroadcastListeners[broadcastName] then return end
 		
 		meta._LocalBroadcastListeners[broadcastName] = task.spawn(function()
-			while task.wait(1) do
+			while true do
+				dispatch(record.key, "OnLocalBroadcastListenerReady", realName)
 				local success, err = pcall(function()
 					MessagingService:SubscribeAsync(broadcastName, function(message)
 						callbackFunc(message.Data.Key, message.Data)
@@ -556,7 +560,8 @@ local function InPlayerData(meta, Key)
 					return nil
 				end
 
-				dispatch(record.key, "OnDataReceivingBroadcast", realName, {})
+				dispatch(record.key, "OnLocalBroadcastListenerCalled", realName)
+				task.wait(meta.MessagingLocalListeningCooldown or 5)
 			end
 		end)
 	end
@@ -1821,6 +1826,26 @@ local function InPlayerData(meta, Key)
 			return registerCallback("OnDataError", Callback)
 		end
 		
+		function callbackMethods:OnSendingBroadcast(Callback: (Key: string, BroadcastName: string, BroadcastData: UDataComponentBroadcast) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnSendingBroadcast", Callback)
+		end
+		
+		function callbackMethods:OnReceivingBroadcast(Callback: (Key: string, BroadcastName: string, BroadcastData: UDataComponentBroadcast) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnReceivingBroadcast", Callback)
+		end
+		
+		function callbackMethods:OnLocalBroadcastListenerReady(Callback: (Key: string, LocalBroadcastName: string) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnLocalBroadcastListenerReady", Callback)
+		end
+		
+		function callbackMethods:OnLocalBroadcastListenerCalled(Callback: (Key: string, LocalBroadcastName: string) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnLocalBroadcastListenerCalled", Callback)
+		end
+		
+		function callbackMethods:OnLocalBroadcastListenerClosed(Callback: (Key: string, LocalBroadcastName: string) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnLocalBroadcastListenerRemoved", Callback)
+		end
+		
 		return callbackMethods
 	end
 
@@ -1917,7 +1942,7 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
-		dispatch(record.key, "OnDataSendingBroadcast", name, deepclone(messages))
+		dispatch(record.key, "OnSendingBroadcast", name, deepclone(messages))
 		return success
 	end
 	
@@ -1940,7 +1965,7 @@ local function InPlayerData(meta, Key)
 			return nil
 		end
 		
-		dispatch(record.key, "OnDataReceivingBroadcast", name, deepclone(methods))
+		dispatch(record.key, "OnReceivingBroadcast", name, deepclone(methods))
 		return methods :: UDataComponentBroadcast
 	end
 	
@@ -1988,7 +2013,7 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
-		dispatch(record.key, "OnDataSendingBroadcast", name, deepclone(messages))
+		dispatch(record.key, "OnSendingBroadcast", name, deepclone(messages))
 		return true
 	end
 	
@@ -2016,7 +2041,7 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
-		dispatch(record.key, "OnDataLocalBroadcastListenerClosed", name)
+		dispatch(record.key, "OnLocalBroadcastListenerClosed", name)
 		return true
 	end
 
@@ -2063,6 +2088,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self.MessagingNamespace = "UDataComponentReplication"
 	self.MessagingSendingCooldown = 5
 	self.MessagingReceivingCooldown = 5
+	self.MessagingLocalListeningCooldown = 5
 	self.ArchivationEnabled = true
 	self.ArchivationSuffix = "_archive"
 	self.MessagingDebugEnabled = false
@@ -2111,7 +2137,11 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataBindExpired = {},
 		OnCacheCleaned = {},
 		OnReleased = {},
-		OnDataError = {}
+		OnDataError = {},
+		OnSendingBroadcast = {},
+		OnReceivingBroadcast = {},
+		OnLocalBroadcastListenerReady = {},
+		OnLocalBroadcastListenerClosed = {},
 	})
 	
 	self._UDataComponentDynamicCallbacks = SDictionary.new("string", "table", {
@@ -2128,7 +2158,11 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataBindExpired = {},
 		OnCacheCleaned = {},
 		OnReleased = {},
-		OnDataError = {}
+		OnDataError = {},
+		OnSendingBroadcast = {},
+		OnReceivingBroadcast = {},
+		OnLocalBroadcastListenerReady = {},
+		OnLocalBroadcastListenerClosed = {},
 	})
 
 	if Configurations then
