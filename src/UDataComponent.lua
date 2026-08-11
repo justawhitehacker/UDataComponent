@@ -31,6 +31,8 @@ local Players = game:GetService("Players")
 local MessagingService = game:GetService("MessagingService")
 local HttpService = game:GetService("HttpService")
 
+local placeId = game.PlaceId
+
 local __sc = script.ScopedMutex
 
 local SDictionary = require(script.SDictionary)
@@ -111,6 +113,7 @@ export type UDataComponentCallbackFunctions = {
 
 export type UDataComponentInfo = {
 	GetPlayerData: (self: UDataComponentInfo, Key: string | number, Callbacks: {UDataComponentCallbackFunctions?}) -> UDataComponentRecord,
+	GetGlobalData: (self: UDataComponentInfo, Callbacks: {UDataComponentCallbackFunctions?}) -> UDataComponentRecord,
 	GetDataStoreName: (self: UDataComponentInfo) -> string | number,
 
 	Enabled : boolean,
@@ -543,10 +546,12 @@ local function InPlayerData(meta, Key)
 		end
 	end
 	
-	local function listen_local_broadcast(broadcastName, realName, callbackFunc)
+	local function listen_local_broadcast(broadcastName, realName, key, callbackFunc)
 		if meta._LocalBroadcastListeners[broadcastName] then return end
 		
-		meta._LocalBroadcastListeners[broadcastName] = task.spawn(function()
+		meta._LocalBroadcastListeners[broadcastName] = {}
+		meta._LocalBroadcastListeners[broadcastName].Key = key
+		meta._LocalBroadcastListeners[broadcastName].Schedule = task.spawn(function()
 			while true do
 				dispatch(record.key, "OnLocalBroadcastListenerReady", realName)
 				local success, err = pcall(function()
@@ -2021,7 +2026,7 @@ local function InPlayerData(meta, Key)
 		local name = meta.MessagingNamespace .. BroadcastName or "UDataComponent"
 		local encryptedName = encrypt(name, Password)
 		
-		listen_local_broadcast(encryptedName, BroadcastName, Callback)
+		listen_local_broadcast(encryptedName, BroadcastName, record.key, Callback)
 	end
 	
 	function record:CloseLocalBroadcastListener(LocalBroadcastName : string, Password : string)
@@ -2029,8 +2034,14 @@ local function InPlayerData(meta, Key)
 		local encryptedName = encrypt(name, Password)
 		
 		local success, err = pcall(function()
-			local listener = meta._LocalBroadcastListeners[encryptedName]
-			if listener then
+			local broadcast = meta._LocalBroadcastListeners[encryptedName]
+			if not broadcast then
+				error("Local broadcast listener is not found")
+			end
+			
+			local listener = meta._LocalBroadcastListeners[encryptedName].Schedule
+			local keyOwner = meta._LocalBroadcastListeners[encryptedName].Key
+			if listener and keyOwner then
 				task.cancel(listener)
 				meta._LocalBroadcastListeners[encryptedName] = nil
 			end
