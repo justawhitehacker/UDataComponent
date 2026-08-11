@@ -71,10 +71,10 @@ export type UDataComponentRecord = {
 	IsExclusiveAccessBound: (self: UDataComponentRecord) -> boolean,
 	IsPlayerInExclusiveAccess: (self: UDataComponentRecord, PlayerThatAssumedExclusive: Player) -> boolean,
 	CreateValidation: (self: UDataComponentRecord, ValidationFunction: (ValidationDummy: UDataComponentValidationDummy) -> any) -> (),
-	Arise: (self: UDataComponentRecord) -> boolean,
+	Unarchive: (self: UDataComponentRecord, Attempts: number?, YieldTime: number?) -> boolean,
 	OnConnect: (self: UDataComponentRecord) -> UDataComponentCallbackFunctions,
 	SmartCleanCache: (self: UDataComponentRecord, Interval: number?) -> (),
-	EndCleanCache: (self: UDataComponentRecord) -> (),
+	EndCacheCleaning: (self: UDataComponentRecord) -> (),
 	GetVersion: (self: UDataComponentRecord) -> number,
 	BroadcastCurrentData: (self: UDataComponentRecord, BroadcastName: string, DetailedThings: any?) -> boolean,
 	WaitForBroadcastPacket: (self: UDataComponentRecord, BroadcastName: string) -> UDataComponentBroadcast,	
@@ -95,6 +95,7 @@ export type UDataComponentCallbackFunctions = {
 	OnDataSaving: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnDataSaved: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
 	OnDataArchived: (self: UDataComponentCallbackFunctions, Callback: (Key: string, ArchivedData: any) -> ()) -> UDataComponentCallbackConnection,
+	OnDataUnarchived: (self: UDataComponentCallbackFunctions, Callback: (Key: string, UnarchivedData: any) -> ()) -> UDataComponentCallbackConnection,
 	OnDataRecovery: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
 	OnDataCached: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
 	OnDataRemoved: (self: UDataComponentCallbackFunctions, Callback: (Key: string, RemovedData: any) -> ()) -> UDataComponentCallbackConnection,
@@ -113,7 +114,7 @@ export type UDataComponentCallbackFunctions = {
 
 export type UDataComponentInfo = {
 	GetPlayerData: (self: UDataComponentInfo, Key: string | number, Callbacks: {UDataComponentCallbackFunctions?}) -> UDataComponentRecord,
-	GetGlobalData: (self: UDataComponentInfo, Callbacks: {UDataComponentCallbackFunctions?}) -> UDataComponentRecord,
+	GetLocalData: (self: UDataComponentInfo, Callbacks: {UDataComponentCallbackFunctions?}) -> UDataComponentRecord,
 	GetDataStoreName: (self: UDataComponentInfo) -> string | number,
 
 	Enabled : boolean,
@@ -145,6 +146,7 @@ export type UDataComponentInfo = {
 	DataExpiredDuration : number,
 	DataBlueprint : {any?},
 	ErrorReasonNamespace : string,
+	LocalDataNamespace : string,
 	MessagingEnabled : boolean,
 	MessagingNamespace : string,
 	MessagingCooldown : number,
@@ -587,7 +589,7 @@ local function InPlayerData(meta, Key)
 							local latestData = meta._DataCache[obj.Key]
 							if not latestData then return end
 							
-							latestData.__version = (currentData.__version or 0) + 1
+							latestData.__version = (latestData.__version or 0) + 1
 							local status, _, message = write_wal_optionally(obj.WAL, obj.Data, obj.Backup, obj.Key, latestData)
 
 							if message == "wal_disabled" then
@@ -670,12 +672,9 @@ local function InPlayerData(meta, Key)
 		
 		if typeof(thisValue) ~= "number" then return thisValue end
 		
-		if clampMin ~= nil then return math.max(thisValue, clampMin) end
-		if clampMax ~= nil then return math.min(thisValue, clampMax) end
-		
-		if clampMin ~= nil and clampMax ~= nil then
-			return math.clamp(thisValue, clampMin, clampMax) 
-		end
+		if clampMin ~= nil and clampMax == nil then return math.max(thisValue, clampMin) 
+		elseif clampMax ~= nil and clampMin == nil then return math.min(thisValue, clampMax) 
+		elseif clampMin ~= nil and clampMax ~= nil then return math.clamp(thisValue, clampMin, clampMax) end
 		
 		return thisValue
 	end
@@ -1698,7 +1697,7 @@ local function InPlayerData(meta, Key)
 		ValidationFunction(dummyMethods)
 	end
 	
-	function record:Arise(Attempts: number?, YieldTime: number?)
+	function record:Unarchive(Attempts: number?, YieldTime: number?)
 		if not meta.ArchivationEnabled then
 			dispatch(record.key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Archiving is disabled.")
 			return false
@@ -1722,7 +1721,16 @@ local function InPlayerData(meta, Key)
 			task.wait(yield or 3)
 		until _attempts >= att or obtained ~= nil
 		
-		return obtained ~= nil
+		if obtained ~= nil then
+			write_data(meta._CurrentDataStore, record.key, obtained)
+			meta._DataCache[record.key] = obtained
+			
+			dispatch(record.key, "OnDataUnarchived", deepclone(obtained))
+			
+			return true
+		end
+		
+		return false
 	end
 	
 	function record:OnConnect() : UDataComponentCallbackFunctions
@@ -1792,6 +1800,10 @@ local function InPlayerData(meta, Key)
 			return registerCallback("OnDataArchived", Callback)
 		end
 		
+		function callbackMethods:OnDataUnarchived(Callback: (Key: string, UnarchivedData: any) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnDataUnarchived", Callback)
+		end
+		
 		function callbackMethods:OnDataRecovery(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
 			return registerCallback("OnDataRecovery", Callback)
 		end
@@ -1845,7 +1857,7 @@ local function InPlayerData(meta, Key)
 		end
 		
 		function callbackMethods:OnLocalBroadcastListenerClosed(Callback: (Key: string, LocalBroadcastName: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnLocalBroadcastListenerRemoved", Callback)
+			return registerCallback("OnLocalBroadcastListenerClosed", Callback)
 		end
 		
 		return callbackMethods
@@ -1898,7 +1910,7 @@ local function InPlayerData(meta, Key)
 	end
 
 	function record:GetVersion()
-		return meta._DataCache[record.key].__version or 0
+		return meta._DataCache[record.key] and meta._DataCache[record.key].__version or 0
 	end
 	
 	function record:BroadcastCurrentData(BroadcastName : string, DetailedThings : any?)
@@ -1920,7 +1932,7 @@ local function InPlayerData(meta, Key)
 		end
 		
 		data = deepclone(data)
-		local name = meta.MessagingNamespace .. BroadcastName or "UDataComponent"
+		local name = (meta.MessagingNamespace .. BroadcastName) or "UDataComponent"
 		
 		local messages = {
 			Key = record.key,
@@ -1949,7 +1961,7 @@ local function InPlayerData(meta, Key)
 	end
 	
 	function record:WaitForBroadcastPacket(BroadcastName : string, Timeout : number?) : UDataComponentBroadcast
-		local name = meta.MessagingNamespace .. BroadcastName or "UDataComponent"
+		local name = (meta.MessagingNamespace .. BroadcastName) or "UDataComponent"
 		local currentThread = coroutine.running()
 		Timeout = Timeout or 50
 		
@@ -2009,7 +2021,7 @@ local function InPlayerData(meta, Key)
 		end
 		
 		data = deepclone(data)
-		local name = meta.MessagingNamespace .. BroadcastName or "UDataComponent"
+		local name = (meta.MessagingNamespace .. BroadcastName) or "UDataComponent"
 		local encryptedName = encrypt(name, Password)
 		
 		local messages = {
@@ -2039,14 +2051,14 @@ local function InPlayerData(meta, Key)
 	end
 	
 	function record:ListenToLocalBroadcast(BroadcastName : string, Password : string, Callback: (Key: string, BroadcastData: UDataComponentBroadcast) -> ())
-		local name = meta.MessagingNamespace .. BroadcastName or "UDataComponent"
+		local name = (meta.MessagingNamespace .. BroadcastName) or "UDataComponent"
 		local encryptedName = encrypt(name, Password)
 		
 		listen_local_broadcast(encryptedName, BroadcastName, record.key, Callback)
 	end
 	
 	function record:CloseLocalBroadcastListener(LocalBroadcastName : string, Password : string)
-		local name = meta.MessagingNamespace .. LocalBroadcastName or "UDataComponent"
+		local name = (meta.MessagingNamespace .. LocalBroadcastName) or "UDataComponent"
 		local encryptedName = encrypt(name, Password)
 		
 		local listener = meta._LocalBroadcastListeners[encryptedName]
@@ -2100,6 +2112,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self.DataExpiredDuration = 300
 	self.DataBlueprint = {}
 	self.ErrorReasonNamespace = "UDataComponent"
+	self.LocalDataNamespace = "LUDataComponent"
 	self.MessagingEnabled = false
 	self.MessagingNamespace = "UDataComponentReplication"
 	self.MessagingSendingCooldown = 5
@@ -2157,7 +2170,8 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnSendingBroadcast = {},
 		OnReceivingBroadcast = {},
 		OnLocalBroadcastListenerReady = {},
-		OnLocalBroadcastListenerClosed = {},
+		OnLocalBroadcastListenerCalled = {},
+		OnLocalBroadcastListenerClosed = {}
 	})
 	
 	self._UDataComponentDynamicCallbacks = SDictionary.new("string", "table", {
@@ -2178,7 +2192,8 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnSendingBroadcast = {},
 		OnReceivingBroadcast = {},
 		OnLocalBroadcastListenerReady = {},
-		OnLocalBroadcastListenerClosed = {},
+		OnLocalBroadcastListenerCalled = {},
+		OnLocalBroadcastListenerClosed = {}
 	})
 
 	if Configurations then
@@ -2208,6 +2223,21 @@ function UDataComponent:GetPlayerData(Key : string | number, Callbacks : {UDataC
 	end
 
 	return InPlayerData(self, Key) :: UDataComponentRecord
+end
+
+function UDataComponent:GetLocalData(Callbacks : {UDataComponentCallbackFunctions?}) : UDataComponentRecord
+	local locKey = self.LocalDataNamespace .. "@" .. self._DataStoreName
+	if Callbacks then
+		for key, value in pairs(Callbacks) do
+			local currentFunc = self._UDataComponentCallbacks:Get(locKey)
+			
+			if currentFunc then
+				currentFunc[key] = value
+			end
+		end
+	end
+	
+	return InPlayerData(self, locKey) :: UDataComponentRecord
 end
 
 function UDataComponent:GetDataStoreName() : string
