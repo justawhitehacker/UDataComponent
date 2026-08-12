@@ -165,6 +165,10 @@ export type UDataComponentInfo = {
 	MaxDataSavingPerTick : number,
 }
 
+export type UDataComponentEditor = {
+	Give: (self: UDataComponentEditor, ThisData: any, Value: any) -> (),
+}
+
 export type UDataComponentBroadcast = {
 	Key : string | number,
 	Data : any,
@@ -1876,13 +1880,71 @@ local function InPlayerData(meta, Key)
 		return callbackMethods
 	end
 	
-	function record:SwapTransaction(OtherPlayerData : UDataComponentRecord, Transaction: (ThisCurrentData: any, OtherCurrentData: any) -> ())
+	function record:SwapTransaction(OtherPlayerData : UDataComponentRecord, Transaction: (ThisCurrentData: UDataComponentEditor, OtherCurrentData: UDataComponentEditor) -> UDataComponentEditorResult)
 		if not meta.SwappingEnabled then
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Swapping is disabled")
 			return
 		end
 		
+		local otherData = OtherPlayerData:Get()
+		if not otherData then return end
 		
+		local myData = meta._DataCache[record.Key]
+		if not myData then return end
+		
+		local myMethods = {}
+		local otherMethods = {}
+		local obtainedResults = { Other = {}, This = {} }
+		
+		function myMethods:Give(ThisData: any, Value: number)
+			local findData = meta._DataCache[record.Key]
+			if not findData then return end
+			
+			if findData[ThisData] and typeof(findData[ThisData]) ~= "number" then return end
+			
+			obtainedResults["Other"][ThisData] = Value
+		end
+		
+		function otherMethods:Give(ThisData: any, Value: number)
+			local otherData = OtherPlayerData:Get()
+			if not otherData then return end
+			
+			if otherData[ThisData] and typeof(otherData[ThisData]) ~= "number" then return end
+			
+			obtainedResults["This"][ThisData] = Value
+		end
+		
+		local result = Transaction(myMethods, otherMethods)
+		
+		if typeof(result) ~= "function" then return end
+		
+		OtherPlayerData:SafeWrite(function(CurrentOtherData)
+			for key, value in pairs(obtainedResults.This) do
+				if typeof(value) ~= "number" then continue end
+				CurrentOtherData[key] = (CurrentOtherData[key] or 0) + value
+			end
+			
+			for key, value in pairs(obtainedResults.Other) do
+				if typeof(value) ~= "number" then continue end
+				CurrentOtherData[key] = (CurrentOtherData[key] or 0) - value
+			end
+			
+			return CurrentOtherData
+		end)
+		
+		record:SafeWrite(function(CurrentMyData)
+			for key, value in pairs(obtainedResults.Other) do
+				if typeof(value) ~= "number" then continue end
+				CurrentMyData[key] = (CurrentMyData[key] or 0) + value
+			end
+			
+			for key, value in pairs(obtainedResults.This) do
+				if typeof(value) ~= "number" then continue end
+				CurrentMyData[key] = (CurrentMyData[key] or 0) - value
+			end
+			
+			return CurrentMyData
+		end)
 	end
 
 	function record:SmartCleanCache(Interval: number?)
