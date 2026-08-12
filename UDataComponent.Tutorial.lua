@@ -45,15 +45,15 @@ Players.PlayerAdded:Connect(function(player)
     -- You can directly add the callbacks into GetPlayerData params
     -- Or use "OnConnect" level function to add the data
 
-    PlayerData:OnConnect():OnDataSaved(function(CloneData)
+    PlayerData:OnConnect():OnDataSaved(function(Key, CloneData)
         print("Data saved!")
     end)
 
-    PlayerData:OnConnect():OnDataLoaded(function(CloneData)
+    PlayerData:OnConnect():OnDataLoaded(function(Key, CloneData)
         print("Data loaded!")
     end)
 
-    local TemporaryCallback = PlayerData:OnConnect():OnDataCached(function(CloneData)
+    local TemporaryCallback = PlayerData:OnConnect():OnDataCached(function(Key, CloneData)
         print("This is in temporary connect")
     end)
 
@@ -99,7 +99,7 @@ Players.PlayerAdded:Connect(function(player)
 
     -- This allow UDataComponent in PlayerData's level to clean the useless cache every 30 seconds in interval
     -- To gain a better performance in server
-    PlayerData:SmartCleanCache(30) 
+    PlayerData:SmartCleanCache(300) 
 end)
 
 Players.PlayerRemoving:Connect(function(player)
@@ -123,5 +123,6 @@ Platform.Touched:Connect(function(Hit)
 
         -- Adding 1 level to Level in Data
         CurrentData.Level += 1
+        return CurrentData -- Don't forget to return the parameter! Because that is the modified data that you did
     end)
 end)
