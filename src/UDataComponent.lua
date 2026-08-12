@@ -739,9 +739,13 @@ local function InPlayerData(meta, Key)
 	local function create_exclusive_safety(key)
 		Players.PlayerRemoving:Connect(function(player)
 			if meta._AutosaveDied then return end
-
+			
+			local now = workspace:GetServerTimeNow()
 			for key, bound in pairs(meta._BoundRegistry) do
 				if bound.UserId == player.UserId then
+					if not meta._DataCache[key] or not meta._DataCache[key].__bounds then continue end
+					meta._DataCache[key].__bounds.since = now
+					
 					call_flush(key, meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
 					meta._BoundRegistry[key] = nil
 				end
@@ -827,11 +831,16 @@ local function InPlayerData(meta, Key)
 		if meta._BoundRegistry[key] then
 			return
 		end
-
+		
+		local now = workspace:GetServerTimeNow()
 		meta._BoundRegistry[key] = {
 			UserId = player.UserId,
 			Since = timeSinceBound,
-			Coroutine = function(pendingTask)
+			Coroutine = function(pendingTask)		
+				if meta._DataCache[key] and meta._DataCache[key].__bounds then
+					meta._DataCache[key].__bounds.since = now -- update the timestamp of subscription
+				end
+				
 				write_wal_immediately(key, meta._CurrentWALDataStore, meta._CurrentDataStore)
 				pendingTask -= 1
 			end
