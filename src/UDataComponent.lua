@@ -71,6 +71,7 @@ export type UDataComponentRecord = {
 	IsSessionLocked: (self: UDataComponentRecord, OwnerIdentity: string) -> boolean,
 	BindExclusiveAccess: (self: UDataComponentRecord, ExclusivePlayer: Player) -> boolean,
 	UnbindExclusiveAccess: (self: UDataComponentRecord) -> boolean,
+	RefreshExclusiveAccess: (self: UDataComponentRecord) -> boolean,
 	IsExclusiveAccessBound: (self: UDataComponentRecord) -> boolean,
 	IsPlayerInExclusiveAccess: (self: UDataComponentRecord, PlayerThatAssumedExclusive: Player) -> boolean,
 	CreateValidation: (self: UDataComponentRecord, ValidationFunction: (ValidationDummy: UDataComponentValidationDummy) -> any) -> (),
@@ -707,6 +708,33 @@ local function InPlayerData(meta, Key)
 		meta._DataCache[key][thisData] = value
 		return true
 	end
+	
+	local function write_wal_immediately(key, wal, data)
+		local currentData = meta._DataCache[key]
+		if not currentData then return end
+		
+		if meta.WALEnabled then
+			local success, err = pcall(function()
+				wal:UpdateAsync(key, function(old)
+					return currentData
+				end)
+			end)
+			
+			if not success then
+				dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to save WAL immediately, meaning the last data record haven't happened.")
+			end
+		else
+			local success, err = pcall(function()
+				data:UpdateAsync(key, function(old)
+					return currentData
+				end)
+			end)
+			
+			if not success then
+				dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to save last data, meaning the last data record haven't happened.")
+			end
+		end
+	end
 
 	local function create_exclusive_safety(key)
 		Players.PlayerRemoving:Connect(function(player)
@@ -804,7 +832,7 @@ local function InPlayerData(meta, Key)
 			UserId = player.UserId,
 			Since = timeSinceBound,
 			Coroutine = function(pendingTask)
-				call_flush(key, meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
+				write_wal_immediately(key, meta._CurrentWALDataStore, meta._CurrentDataStore)
 				pendingTask -= 1
 			end
 		}
@@ -1420,6 +1448,7 @@ local function InPlayerData(meta, Key)
 
 				status, obtainedData = preStatus, dataResult
 			else
+				print("Data is existed")
 				status = true
 			end
 			
@@ -1437,17 +1466,21 @@ local function InPlayerData(meta, Key)
 				local timeout = dayInSec * days
 
 				if workspace:GetServerTimeNow() - since < timeout then
+					print("A")
 					local plr = Players:GetPlayerByUserId(id)
 					bind_exclusive_access(record.Key, record, since, plr)
 				else
+					print("B")
 					dispatch(record.Key, "OnDataBindExpired")
 				end
 			end
 
 			if ExclusivePlayer and obtainedData then
 				if ensure_exc_player(record.Key, ExclusivePlayer) then
+					print("Real data")
 					status = true
 				else
+					print("Fake data")
 					status, obtainedData = false, get_blueprint()
 				end
 			end
@@ -1647,6 +1680,35 @@ local function InPlayerData(meta, Key)
 
 		unbind_exclusive_access(record.Key)
 
+		return true
+	end
+	
+	function record:RefreshExclusiveAccess()
+		if not meta.ExclusiveAccessEnabled then
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
+			return false
+		end
+		
+		local currentData = meta._DataCache[record.Key]
+		local now = workspace:GetServerTimeNow()
+		if not currentData then 
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Unable to renew the exclusive access subscription, it seems you called the renew function before the data loaded.")
+			return false 
+		end
+		
+		local data = deepclone(currentData)
+		if data.__bounds == nil or meta._BoundRegistry[record.Key] == nil then 
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is not bound to any player.")
+			return false 
+		end
+		
+		record:SafeWrite(function(CurrentData)
+			CurrentData.__bounds.since = now
+			
+			return CurrentData
+		end)
+		
+		meta._BoundRegistry[record.Key].Since = now
 		return true
 	end
 
@@ -2289,6 +2351,11 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	return self
 end
 
+--[[
+	@param Key: string | number
+	@param Callbacks: {UDataComponentCallbackFunctions?}
+	@return UDataComponentRecord
+]]
 function UDataComponent:GetPlayerData(Key : string | number, Callbacks : {UDataComponentCallbackFunctions?}) : UDataComponentRecord
 	if Callbacks then
 		for key, value in pairs(Callbacks) do
