@@ -1532,7 +1532,6 @@ local function InPlayerData(meta, Key)
 
 				status, obtainedData = preStatus, dataResult
 			else
-				print("Data is existed")
 				status = true
 			end
 			
@@ -1550,21 +1549,17 @@ local function InPlayerData(meta, Key)
 				local timeout = dayInSec * days
 
 				if workspace:GetServerTimeNow() - since < timeout then
-					print("A")
 					local plr = Players:GetPlayerByUserId(id)
 					bind_exclusive_access(record.Key, record, since, plr)
 				else
-					print("B")
 					dispatch(record.Key, "OnDataBindExpired")
 				end
 			end
 
 			if ExclusivePlayer and obtainedData then
 				if ensure_exc_player(record.Key, ExclusivePlayer) then
-					print("Real data")
 					status = true
 				else
-					print("Fake data")
 					status, obtainedData = false, get_blueprint()
 				end
 			end
