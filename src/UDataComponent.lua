@@ -1657,7 +1657,7 @@ local function InPlayerData(meta, Key)
 			end)
 
 			if meta._BoundRegistry[record.Key] == nil then
-				bind_exclusive_access(record.Key, now, record, ExclusivePlayer)
+				bind_exclusive_access(record.Key, record, now, ExclusivePlayer)
 			end			
 
 			return true
@@ -1966,12 +1966,17 @@ local function InPlayerData(meta, Key)
 		local otherMethods = {}
 		local obtainedResults = { Other = {}, This = {} }
 		
+		local otherData = meta._DataCache[OtherPlayerData.Key]
+		local myData = meta._DataCache[record.Key]
+		
+		if not otherData or not myData then
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .."]: Unable to do transaction with other player, because failed to get data. It seems you're not loaded the data yet.")
+			return false
+		end
+		
 		local terminated = false
 		function myMethods:Give(ThisData: any, Value: number)
-			local findData = meta._DataCache[record.Key]
-			if not findData then return end
-			
-			local _value = findData[ThisData] or 0
+			local _value = myData[ThisData] or 0
 			if not _value or typeof(_value) ~= "number" then return end
 			
 			Value = math.clamp(Value, 0, _value)
@@ -1979,9 +1984,6 @@ local function InPlayerData(meta, Key)
 		end
 		
 		function otherMethods:Give(ThisData: any, Value: number)
-			local otherData = OtherPlayerData:Get()
-			if not otherData then return end
-			
 			local _value = otherData[ThisData] or 0
 			if not _value or typeof(_value) ~= "number" then return end
 			
@@ -1989,10 +1991,8 @@ local function InPlayerData(meta, Key)
 			obtainedResults["This"][ThisData] = Value
 		end
 		
-		Transaction(myMethods, otherMethods)
-		
 		local isSuccess1, lock1 = OtherPlayerData:AcquireLockSession(nil, 10)
-		local isSuccess2, lock2 = self:AcquireLockSession(nil, 10)
+		local isSuccess2, lock2 = record:AcquireLockSession(nil, 10)
 		
 		if not isSuccess1 or not isSuccess2 then
 			if isSuccess1 then OtherPlayerData:ReleaseLockSession(lock1) end
@@ -2002,16 +2002,17 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
-		local otherData = meta._DataCache[OtherPlayerData.Key]
-		local myData = meta._DataCache[record.Key]
+		otherData = meta._DataCache[OtherPlayerData.Key]
+		myData = meta._DataCache[record.Key]
 		
 		if not otherData or not myData then
 			OtherPlayerData:ReleaseLockSession(lock1)
 			record:ReleaseLockSession(lock2)
-			
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .."]: Unable to do transaction with other player, because failed to get data. It seems you're not loaded the data yet.")
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .."]: Unable to do transaction with other player, because failed to get data. It seems you're not loaded the data yet, or the snapshot gone.")
 			return false
 		end
+		
+		Transaction(myMethods, otherMethods)
 		
 		for key, value in pairs(obtainedResults.Other) do
 			otherData[key] = (otherData[key] or 0) + value
@@ -2403,7 +2404,7 @@ function UDataComponent:GetLocalData(Callbacks : {UDataComponentCallbackFunction
 	local locKey = self.LocalDataNamespace .. "@" .. self._DataStoreName
 	if Callbacks then
 		for key, value in pairs(Callbacks) do
-			local currentFunc = self._UDataComponentCallbacks:Get(locKey)
+			local currentFunc = self._UDataComponentCallbacks:Get(key)
 			
 			if currentFunc then
 				currentFunc[key] = value
