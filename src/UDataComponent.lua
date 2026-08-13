@@ -68,15 +68,15 @@ export type UDataComponentValidationDummy = {
 export type UDataComponentRecord = {
 	Get: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?) -> any,
 	Save: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
-	Write: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> (),
+	Write: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> boolean,
 	Flush: (self: UDataComponentRecord) -> (),
 	Recover: (self: UDataComponentRecord) -> boolean,
 	Detach : (self: UDataComponentRecord) -> (),
 	ForceSave: (self: UDataComponentRecord, AlongCooldown: number, Data: any, SegmentIndex: number?) -> (),
-	ForceWrite: (self: UDataComponentRecord, AlongCooldown: number, WritingFunction: (CurrentData: any) -> any) -> (),
+	ForceWrite: (self: UDataComponentRecord, AlongCooldown: number, WritingFunction: (CurrentData: any) -> any) -> boolean,
 	SafeGet: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> any,
 	SafeSave: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
-	SafeWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> (),
+	SafeWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> boolean,
 	AcquireLockSession: (self: UDataComponentRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, any), 
 	ReleaseLockSession: (self: UDataComponentRecord, OwnerIdentity: string) -> (),
 	IsSessionLocked: (self: UDataComponentRecord, OwnerIdentity: string) -> boolean,
@@ -123,6 +123,9 @@ export type UDataComponentCallbackFunctions = {
 	OnDataUnbinding: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Data: any) -> ()) -> UDataComponentCallbackConnection,
 	OnDataBindExpired: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnCacheCleaned: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
+	OnTransactionBegin: (self: UDataComponentCallbackFunctions, Callback: (Key: string, WithKey: string) -> ()) -> UDataComponentCallbackConnection,
+	OnTransactionFiltered: (self: UDataComponentCallbackFunctions, Callback: (WhoKey: string, FilteredObject: any) -> ()) -> UDataComponentCallbackConnection,
+	OnTransactionEnded: (self: UDataComponentCallbackFunctions, Callback: (Key: string, WithKey: string, Results: any) -> ()) -> UDataComponentCallbackConnection,
 	OnReleased: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnDataError: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Reason: string) -> ()) -> UDataComponentCallbackConnection,
 	OnSendingBroadcast: (self: UDataComponentCallbackFunctions, Callback: (Key: string, BroadcastName: string, BroadcastData: UDataComponentBroadcast) -> ()) -> UDataComponentCallbackConnection,
@@ -1991,6 +1994,18 @@ local function InPlayerData(meta, Key)
 			return registerCallback("OnCacheCleaned", Callback)
 		end
 		
+		function callbackMethods:OnTransactionBegin(Callback: (Key: string, WithKey: string) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnTransactionBegin", Callback)
+		end
+		
+		function callbackMethods:OnTransactionFiltered(Callback: (Key: string, FilteredObject: any) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnTransactionFiltered", Callback)
+		end
+		
+		function callbackMethods:OnTransactionEnded(Callback: (Key: string, WithKey: string, Results: any) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnTransactionEnded", Callback)
+		end
+		
 		function callbackMethods:OnReleased(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
 			return registerCallback("OnReleased", Callback)
 		end
@@ -2057,7 +2072,10 @@ local function InPlayerData(meta, Key)
 		local terminated = false
 		function myMethods:Give(ThisData: any, Value: number)
 			local _value = myData[ThisData] or 0
-			if not _value or typeof(_value) ~= "number" then return end
+			if not _value or typeof(_value) ~= "number" then 
+				dispatch(record.Key, "OnTransactionFiltered", ThisData)
+				return 
+			end
 			
 			Value = math.clamp(Value, 0, _value)
 			obtainedResults["Other"][ThisData] = Value
@@ -2065,7 +2083,10 @@ local function InPlayerData(meta, Key)
 		
 		function otherMethods:Give(ThisData: any, Value: number)
 			local _value = otherData[ThisData] or 0
-			if not _value or typeof(_value) ~= "number" then return end
+			if not _value or typeof(_value) ~= "number" then 
+				dispatch(OtherPlayerData.Key, "OnTransactionFiltered", ThisData)
+				return 
+			end
 			
 			Value = math.clamp(Value, 0, _value)
 			obtainedResults["This"][ThisData] = Value
@@ -2092,6 +2113,9 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
+		dispatch(record.Key, "OnTransactionBegin", OtherPlayerData.Key)
+		dispatch(OtherPlayerData.Key, "OnTransactionBegin", record.Key)
+		
 		Transaction(myMethods, otherMethods)
 		
 		for key, value in pairs(obtainedResults.Other) do
@@ -2110,6 +2134,8 @@ local function InPlayerData(meta, Key)
 		OtherPlayerData:ReleaseLockSession(lock1)
 		record:ReleaseLockSession(lock2)
 		
+		dispatch(record.Key, "OnTransactionEnded", OtherPlayerData.Key, obtainedResults.This)
+		dispatch(OtherPlayerData.Key, "OnTransactionEnded", record.Key, obtainedResults.Other)
 		return true
 	end
 
@@ -2419,6 +2445,9 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataUnbinding = {},
 		OnDataBindExpired = {},
 		OnCacheCleaned = {},
+		OnTransactionBegin = {},
+		OnTransactionFiltered = {},
+		OnTransactionEnded = {},
 		OnReleased = {},
 		OnDataError = {},
 		OnSendingBroadcast = {},
@@ -2441,6 +2470,9 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataUnbinding = {},
 		OnDataBindExpired = {},
 		OnCacheCleaned = {},
+		OnTransactionBegin = {},
+		OnTransactionFiltered = {},
+		OnTransactionEnded = {},
 		OnReleased = {},
 		OnDataError = {},
 		OnSendingBroadcast = {},
