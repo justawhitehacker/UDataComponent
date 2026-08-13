@@ -159,6 +159,10 @@ export type UDataComponentInfo = {
 	MessagingEnabled : boolean,
 	MessagingNamespace : string,
 	MessagingCooldown : number,
+	MessagingSendingCooldown : number,
+	MessagingReceiverCooldown : number,
+	MessagingLocalListeningCooldown : number,
+	ServerClaimerSuffix : string,
 	ArchivationEnabled : boolean,
 	ArchivationSuffix : string,
 	MessagingDebugEnabled : boolean,
@@ -735,6 +739,26 @@ local function InPlayerData(meta, Key)
 			end
 		end
 	end
+	
+	local function broadcast_owner_claimer(key, plrId, now)
+		if not meta.MessagingEnabled then return end
+		
+		local topic = meta.MessagingNamespace .. meta.ServerClaimerSuffix
+		local message = {
+			PossessedKey = key,
+			PossessedUserId = plrId,
+			PossessedSince = now,
+			PossessiveServerId = game.JobId
+		}
+		
+		local success, err = pcall(function()
+			MessagingService:PublishAsync(topic, message)
+		end)
+		
+		if not success then
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to claim ownership of key.")
+		end
+	end
 
 	local function create_exclusive_safety(key)
 		Players.PlayerRemoving:Connect(function(player)
@@ -792,6 +816,38 @@ local function InPlayerData(meta, Key)
 
 		meta._BoundRegistry[key] = nil
 		dispatch(key, "OnDataUnbinding", meta._DataCache[key])
+	end
+	
+	local function claim_ownership()
+		if meta._ClaimerSyncCalled then return end
+		meta._ClaimerSyncCalled = true
+
+		if not meta.MessagingEnabled then return end
+
+		local topic = meta.MessagingNamespace .. meta.ServerClaimerSuffix
+		local success, err = pcall(function()
+			MessagingService:SubscribeAsync(topic, function(message)
+				local payload = message.Data
+				if payload.PossessiveServerId == game.JobId then return end
+
+				local key = payload.PossessedKey
+				local currentBound = meta._BoundRegistry[key]
+				if not currentBound then return end
+
+				if payload.PossessedSince >= currentBound.Since then
+					if meta._DataCache[key] then
+						call_flush(key, meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
+					end
+
+					unbind_exclusive_access(key)
+					dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: A server has been claimed this key, but it's still bounding in this server. So that, UDataComponent decided to remove the died exclusive access.")
+				end
+			end)
+		end)
+		
+		if not success then
+			warn("[" .. meta.ErrorReasonNamespace .. "]: Unable to create a claimer broadcast, reason: " .. tostring(err))
+		end
 	end
 	
 	local function run_exclusive_timer(data, wal, backup)
@@ -854,6 +910,9 @@ local function InPlayerData(meta, Key)
 		ar.Owner = player
 		dispatch(key, "OnDataBinding", meta._DataCache[key])
 		run_exclusive_timer(meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
+		
+		claim_ownership()
+		broadcast_owner_claimer(key, player.UserId, now)
 	end
 
 	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
@@ -2288,6 +2347,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self.MessagingSendingCooldown = 5
 	self.MessagingReceivingCooldown = 5
 	self.MessagingLocalListeningCooldown = 5
+	self.ServerClaimerSuffix = "_possessive_claimer"
 	self.ArchivationEnabled = true
 	self.ArchivationSuffix = "_archive"
 	self.MessagingDebugEnabled = false
@@ -2315,6 +2375,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self._ExclusiveSafetyCalled = false
 	self._IsRunning = false
 	self._CacheCleaningCalled = false
+	self._ClaimedSyncCalled = false
 	
 	self._CacheCleaningThread = nil
 
