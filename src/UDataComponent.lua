@@ -106,6 +106,7 @@ export type UDataComponentRecord = {
 export type UDataComponentCallbackConnection = {
 	Disconnect: (self: UDataComponentCallbackConnection) -> (),
 	DisconnectAfterCalled: (self: UDataComponentCallbackConnection) -> (),
+	Wait: (self: UDataComponentCallbackConnection) -> (),
 	IsConnected: (self: UDataComponentCallbackConnection) -> boolean,
 }
 
@@ -1935,6 +1936,27 @@ local function InPlayerData(meta, Key)
 			
 			function connector:IsConnected()
 				return listener[record.Key] and listener[record.Key][id]
+			end
+			
+			function connector:Wait()
+				local currentThread = coroutine.running()
+				
+				local original = Callback
+				task.spawn(function()
+					listener[record.Key][id] = function(...)
+						while not disconnected do
+							local ok, err = pcall(original, ...)
+							
+							if ok then
+								task.spawn(currentThread)
+								break
+							end
+							task.wait()
+						end
+					end
+				end)
+				
+				coroutine.yield()
 			end
 			
 			return connector
