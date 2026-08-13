@@ -4,6 +4,17 @@
 --[[
 	SIMPLE DOCUMENTATION:
 	
+	Before that, I will tell you what's the differende between Safe, Force, and Normal (un-prefixed).
+	
+	- Safe
+	--- This is method where your data will be handled with locks and queue-based ---
+		
+	- Force
+	--- This is method where the data is immediately commited into data store of roblox, whether affected by cooldown or not, based of the configuration ---
+	
+	- Normal
+	--- This is method where the data handled normally by UDataComponent. Enququed, then commited, without locks. and affected by the cooldown ---
+	
 	-- Constructor --
 	UDataComponent.InDataInfo(DataStoreName: string, scope : string?) : UDataComponentInfo
 	---- Creates a new UDataComponent info object, where all handler tables constructed ----
@@ -77,7 +88,7 @@ export type UDataComponentRecord = {
 	CreateValidation: (self: UDataComponentRecord, ValidationFunction: (ValidationDummy: UDataComponentValidationDummy) -> any) -> (),
 	Unarchive: (self: UDataComponentRecord, Attempts: number?, YieldTime: number?) -> boolean,
 	OnConnect: (self: UDataComponentRecord) -> UDataComponentCallbackFunctions,
-	SwapTransaction: (self: UDataComponentRecord, OtherPlayerData: UDataComponentRecord, Transaction: (ThisCurrentData : any, OtherCurrentData : any) -> ()) -> boolean,
+	SwapTransaction: (self: UDataComponentRecord, OtherPlayerData: UDataComponentRecord, Transaction: (ThisCurrentData : UDataComponentEditor, OtherCurrentData : UDataComponentEditor) -> ()) -> boolean,
 	SmartCleanCache: (self: UDataComponentRecord, Interval: number?) -> (),
 	EndCacheCleaning: (self: UDataComponentRecord) -> (),
 	GetVersion: (self: UDataComponentRecord) -> number,
@@ -149,6 +160,7 @@ export type UDataComponentInfo = {
 	ExclusiveAccessEnabled : boolean,
 	ExclusiveAccessExpiration : number,
 	SwappingEnabled : boolean,
+	SwappingCooldown : number,
 	CacheCleaningEnabled : boolean,
 	CacheCleaningInterval : number,
 	CanDataExpired : boolean,
@@ -2016,6 +2028,15 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 		
+		local now = workspace:GetServerTimeNow()
+		if (meta._SwapTimestamp[record.Key] and now - meta._SwapTimestamp[record.Key] < meta.SwappingCooldown) or (meta._SwapTimestamp[OtherPlayerData.Key] and now - meta._SwapTimestamp[OtherPlayerData.Key] < meta.SwappingCooldown) then
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Swapping is on cooldown")
+			return false
+		end
+		
+		meta._SwapTimestamp[record.Key] = now
+		meta._SwapTimestamp[OtherPlayerData.Key] = now
+		
 		if OtherPlayerData.Key == record.Key then
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Swapping with self is not allowed")
 			return false
@@ -2335,6 +2356,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self.ExclusiveAccessEnabled = true
 	self.ExclusiveAccessExpiration = 1 -- 1 Day
 	self.SwappingEnabled = true
+	self.SwappingCooldown = 5
 	self.CacheCleaningEnabled = true
 	self.CacheCleaningInterval = 300
 	self.CanDataExpired = false
@@ -2362,6 +2384,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	
 	self._GetTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SaveTimestamp = {} -- { [Key: string] = timestamp: number }
+	self._SwapTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SavePendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup, IsSafe } }
 	self._DataCache = {} -- { [Key: string] = Data: any }
