@@ -561,8 +561,6 @@ local function InPlayerData(meta, Key)
 	end
 
 	local function create_lock_timer(ownerId, timeout)
-		ownerId = tostring(ownerId)
-
 		if not meta._LockTimers[ownerId] then
 			meta._LockTimers[ownerId] = coroutine.create(function()
 				local now = workspace:GetServerTimeNow()
@@ -904,11 +902,11 @@ local function InPlayerData(meta, Key)
 			return
 		end
 		
-		local now = workspace:GetServerTimeNow()
 		meta._BoundRegistry[key] = {
 			UserId = player.UserId,
 			Since = timeSinceBound,
 			Coroutine = function(pendingTask)		
+				local now = workspace:GetServerTimeNow()
 				if meta._DataCache[key] and meta._DataCache[key].__bounds then
 					meta._DataCache[key].__bounds.since = now -- update the timestamp of subscription
 				end
@@ -928,7 +926,7 @@ local function InPlayerData(meta, Key)
 		run_exclusive_timer(meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
 		
 		claim_ownership()
-		broadcast_owner_claimer(key, player.UserId, now)
+		broadcast_owner_claimer(key, player.UserId, timeSinceBound)
 	end
 
 	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
@@ -1673,7 +1671,7 @@ local function InPlayerData(meta, Key)
 
 	function record:AcquireLockSession(OwnerIdentity: string?, Timeout: number?)
 		local now = workspace:GetServerTimeNow()
-		OwnerIdentity = OwnerIdentity or HttpService:GenerateGUID(false) .. "-" .. tostring(now)
+		OwnerIdentity = tostring(OwnerIdentity or (HttpService:GenerateGUID(false) .. "-" .. tostring(now)))
 		Timeout = Timeout or 10
 
 		local isSuccess = meta._LockSessions:Acquire(OwnerIdentity)
@@ -1935,23 +1933,14 @@ local function InPlayerData(meta, Key)
 			
 			function connector:Wait()
 				local currentThread = coroutine.running()
-				
-				local original = Callback
-				task.spawn(function()
+				local thread = task.spawn(function()
 					listener[record.Key][id] = function(...)
-						while not disconnected do
-							local ok, err = pcall(original, ...)
-							
-							if ok then
-								task.spawn(currentThread)
-								break
-							end
-							task.wait()
-						end
+						coroutine.resume(currentThread, ...)
 					end
 				end)
 				
 				coroutine.yield()
+				task.cancel(thread)
 			end
 			
 			return connector
@@ -2054,7 +2043,8 @@ local function InPlayerData(meta, Key)
 		return callbackMethods
 	end
 	
-	function record:SwapTransaction(OtherPlayerData : UDataComponentRecord, Transaction: (ThisCurrentData: UDataComponentEditor, OtherCurrentData: UDataComponentEditor) -> ())
+	function record:SwapTransaction(OtherPlayerData : UDataComponentRecord, Transaction: (ThisCurrentData: UDataComponentEditor, OtherCurrentData: UDataComponentEditor) -> (), Timeout : number?)
+		Timeout = Timeout or 10
 		if not meta.SwappingEnabled then
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Swapping is disabled")
 			return false
@@ -2109,8 +2099,8 @@ local function InPlayerData(meta, Key)
 			obtainedResults["This"][ThisData] = Value
 		end
 		
-		local isSuccess1, lock1 = OtherPlayerData:AcquireLockSession(nil, 10)
-		local isSuccess2, lock2 = record:AcquireLockSession(nil, 10)
+		local isSuccess1, lock1 = OtherPlayerData:AcquireLockSession(OtherPlayerData.Key, Timeout)
+		local isSuccess2, lock2 = record:AcquireLockSession(record.Key, Timeout)
 		
 		if not isSuccess1 or not isSuccess2 then
 			if isSuccess1 then OtherPlayerData:ReleaseLockSession(lock1) end
