@@ -61,12 +61,12 @@ export type UDataComponentRecord = {
 	Flush: (self: UDataComponentRecord) -> (),
 	Recover: (self: UDataComponentRecord) -> boolean,
 	Detach : (self: UDataComponentRecord) -> (),
-	ForceSave: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
-	ForceWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> (),
+	ForceSave: (self: UDataComponentRecord, AlongCooldown: number, Data: any, SegmentIndex: number?) -> (),
+	ForceWrite: (self: UDataComponentRecord, AlongCooldown: number, WritingFunction: (CurrentData: any) -> any) -> (),
 	SafeGet: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> any,
 	SafeSave: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
 	SafeWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> (),
-	AcquireLockSession: (self: UDataComponentRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, number), 
+	AcquireLockSession: (self: UDataComponentRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, any), 
 	ReleaseLockSession: (self: UDataComponentRecord, OwnerIdentity: string) -> (),
 	IsSessionLocked: (self: UDataComponentRecord, OwnerIdentity: string) -> boolean,
 	BindExclusiveAccess: (self: UDataComponentRecord, ExclusivePlayer: Player) -> boolean,
@@ -1221,7 +1221,7 @@ local function InPlayerData(meta, Key)
 		return true, "success"
 	end
 
-	function record:ForceSave(Data: any, AlongCooldown : boolean?, SegmentIndex: number?)
+	function record:ForceSave(AlongCooldown : boolean, Data: any, SegmentIndex: number?)
 		local now = workspace:GetServerTimeNow()
 		if AlongCooldown and meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
 		meta._SaveTimestamp[record.Key] = now
@@ -1280,7 +1280,7 @@ local function InPlayerData(meta, Key)
 		return true
 	end
 
-	function record:ForceWrite(Data: any, WritingFunction: (CurrentData: any) -> any, AlongCooldown : boolean?)
+	function record:ForceWrite(AlongCooldown : boolean, WritingFunction: (CurrentData: any) -> any)
 		local now = workspace:GetServerTimeNow()
 		if AlongCooldown and meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
 		meta._SaveTimestamp[record.Key] = now
@@ -1951,28 +1951,30 @@ local function InPlayerData(meta, Key)
 		return callbackMethods
 	end
 	
-	function record:SwapTransaction(OtherPlayerData : UDataComponentRecord, Transaction: (ThisCurrentData: UDataComponentEditor, OtherCurrentData: UDataComponentEditor) -> UDataComponentEditorResult)
+	function record:SwapTransaction(OtherPlayerData : UDataComponentRecord, Transaction: (ThisCurrentData: UDataComponentEditor, OtherCurrentData: UDataComponentEditor) -> ())
 		if not meta.SwappingEnabled then
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Swapping is disabled")
-			return
+			return false
 		end
 		
-		local otherData = OtherPlayerData:Get()
-		if not otherData then return end
-		
-		local myData = meta._DataCache[record.Key]
-		if not myData then return end
+		if OtherPlayerData.Key == record.Key then
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Swapping with self is not allowed")
+			return false
+		end
 		
 		local myMethods = {}
 		local otherMethods = {}
 		local obtainedResults = { Other = {}, This = {} }
 		
+		local terminated = false
 		function myMethods:Give(ThisData: any, Value: number)
 			local findData = meta._DataCache[record.Key]
 			if not findData then return end
 			
-			if findData[ThisData] and typeof(findData[ThisData]) ~= "number" then return end
+			local _value = findData[ThisData] or 0
+			if not _value or typeof(_value) ~= "number" then return end
 			
+			Value = math.clamp(Value, 0, _value)
 			obtainedResults["Other"][ThisData] = Value
 		end
 		
@@ -1980,42 +1982,54 @@ local function InPlayerData(meta, Key)
 			local otherData = OtherPlayerData:Get()
 			if not otherData then return end
 			
-			if otherData[ThisData] and typeof(otherData[ThisData]) ~= "number" then return end
+			local _value = otherData[ThisData] or 0
+			if not _value or typeof(_value) ~= "number" then return end
 			
+			Value = math.clamp(Value, 0, _value)
 			obtainedResults["This"][ThisData] = Value
 		end
 		
-		local result = Transaction(myMethods, otherMethods)
+		Transaction(myMethods, otherMethods)
 		
-		if typeof(result) ~= "function" then return end
+		local isSuccess1, lock1 = OtherPlayerData:AcquireLockSession(nil, 10)
+		local isSuccess2, lock2 = self:AcquireLockSession(nil, 10)
 		
-		OtherPlayerData:SafeWrite(function(CurrentOtherData)
-			for key, value in pairs(obtainedResults.This) do
-				if typeof(value) ~= "number" then continue end
-				CurrentOtherData[key] = (CurrentOtherData[key] or 0) + value
-			end
+		if not isSuccess1 or not isSuccess2 then
+			if isSuccess1 then OtherPlayerData:ReleaseLockSession(lock1) end
+			if isSuccess2 then record:ReleaseLockSession(lock2) end
 			
-			for key, value in pairs(obtainedResults.Other) do
-				if typeof(value) ~= "number" then continue end
-				CurrentOtherData[key] = (CurrentOtherData[key] or 0) - value
-			end
-			
-			return CurrentOtherData
-		end)
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .."]: Unable to do transaction with other player, because failed lock.")
+			return false
+		end
 		
-		record:SafeWrite(function(CurrentMyData)
-			for key, value in pairs(obtainedResults.Other) do
-				if typeof(value) ~= "number" then continue end
-				CurrentMyData[key] = (CurrentMyData[key] or 0) + value
-			end
+		local otherData = meta._DataCache[OtherPlayerData.Key]
+		local myData = meta._DataCache[record.Key]
+		
+		if not otherData or not myData then
+			OtherPlayerData:ReleaseLockSession(lock1)
+			record:ReleaseLockSession(lock2)
 			
-			for key, value in pairs(obtainedResults.This) do
-				if typeof(value) ~= "number" then continue end
-				CurrentMyData[key] = (CurrentMyData[key] or 0) - value
-			end
-			
-			return CurrentMyData
-		end)
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .."]: Unable to do transaction with other player, because failed to get data. It seems you're not loaded the data yet.")
+			return false
+		end
+		
+		for key, value in pairs(obtainedResults.Other) do
+			otherData[key] = (otherData[key] or 0) + value
+			myData[key] = (myData[key] or 0) - value
+		end
+		
+		for key, value in pairs(obtainedResults.This) do
+			myData[key] = (myData[key] or 0) + value
+			otherData[key] = (otherData[key] or 0) - value
+		end
+		
+		OtherPlayerData:Flush()
+		record:Flush()
+		
+		OtherPlayerData:ReleaseLockSession(lock1)
+		record:ReleaseLockSession(lock2)
+		
+		return true
 	end
 
 	function record:SmartCleanCache(Interval: number?)
