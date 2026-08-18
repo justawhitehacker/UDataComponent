@@ -67,14 +67,14 @@ export type UDataComponentValidationDummy = {
 
 export type UDataComponentRecord = {
 	Get: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?) -> any,
-	Save: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
+	Save: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> boolean,
 	Write: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> boolean,
 	Flush: (self: UDataComponentRecord) -> (),
 	Recover: (self: UDataComponentRecord) -> boolean,
 	Detach : (self: UDataComponentRecord) -> (),
-	ForceSave: (self: UDataComponentRecord, AlongCooldown: number, Data: any, SegmentIndex: number?) -> (),
+	ForceSave: (self: UDataComponentRecord, AlongCooldown: number, Data: any, SegmentIndex: number?) -> boolean,
 	ForceWrite: (self: UDataComponentRecord, AlongCooldown: number, WritingFunction: (CurrentData: any) -> any) -> boolean,
-	SafeGet: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> any,
+	SafeGet: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> boolean,
 	SafeSave: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
 	SafeWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> boolean,
 	AcquireLockSession: (self: UDataComponentRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, any), 
@@ -106,7 +106,7 @@ export type UDataComponentRecord = {
 export type UDataComponentCallbackConnection = {
 	Disconnect: (self: UDataComponentCallbackConnection) -> (),
 	DisconnectAfterCalled: (self: UDataComponentCallbackConnection) -> (),
-	Wait: (self: UDataComponentCallbackConnection) -> (),
+	Wait: (self: UDataComponentCallbackConnection) -> (string, any),
 	IsConnected: (self: UDataComponentCallbackConnection) -> boolean,
 }
 
@@ -176,7 +176,7 @@ export type UDataComponentInfo = {
 	MessagingNamespace : string,
 	MessagingCooldown : number,
 	MessagingSendingCooldown : number,
-	MessagingReceiverCooldown : number,
+	MessagingReceivingCooldown : number,
 	MessagingLocalListeningCooldown : number,
 	ServerClaimerSuffix : string,
 	ArchivationEnabled : boolean,
@@ -301,7 +301,7 @@ local function InPlayerData(meta, Key)
 
 		local bound = meta._BoundRegistry[key]
 		if not bound then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed because the data wasn't bound with this player.")
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed because the data isn't bound with this player.")
 			return false
 		end
 
@@ -563,10 +563,11 @@ local function InPlayerData(meta, Key)
 	local function create_lock_timer(ownerId, timeout)
 		if not meta._LockTimers[ownerId] then
 			meta._LockTimers[ownerId] = coroutine.create(function()
-				local now = workspace:GetServerTimeNow()
+				local startedSince = workspace:GetServerTimeNow()
 
 				while meta.Enabled and meta._LockTimers[ownerId] do
-					if now - meta._LockTimers[ownerId] >= timeout then
+					local tickedNow = workspace:GetServerTimeNow()
+					if tickedNow - startedSince >= timeout then
 						record:ReleaseLockSession(ownerId)						
 						break
 					end
@@ -714,17 +715,16 @@ local function InPlayerData(meta, Key)
 	
 	local function check_validation(key, thisData, thisValue)
 		if not is_schema_valid(thisData, thisValue) then
-			return false
+			return false, nil
 		end
 				
 		local value = clamp_value(thisData, thisValue)
 		
 		if not is_data_valid(thisData, value) then
-			return false
+			return false, nil
 		end
 		
-		meta._DataCache[key][thisData] = value
-		return true
+		return true, value
 	end
 	
 	local function write_wal_immediately(key, wal, data)
@@ -810,14 +810,14 @@ local function InPlayerData(meta, Key)
 		game:BindToClose(function()
 			meta._AutosaveDied = true
 
-			local pendingTask = 0
+			local schedule = { pending = 0 }
 			for key, bound in pairs(meta._BoundRegistry) do
-				pendingTask += 1
-				task.spawn(bound.Coroutine, pendingTask)
+				schedule.pending += 1
+				task.spawn(bound.Coroutine, schedule)
 			end
 
 			local remainingTime = 0
-			while pendingTask > 0 and remainingTime < 25 do
+			while schedule.pending > 0 and remainingTime < 25 do
 				task.wait(1)
 				remainingTime += 1
 			end
@@ -879,6 +879,8 @@ local function InPlayerData(meta, Key)
 					local timeout = dayInSec * meta.ExclusiveAccessExpiration
 
 					if now - since > timeout then
+						if not meta._DataCache[key] then continue end
+						
 						meta._DataCache[key].__bounds = nil
 						call_flush(key, data, wal, backup)
 
@@ -905,14 +907,17 @@ local function InPlayerData(meta, Key)
 		meta._BoundRegistry[key] = {
 			UserId = player.UserId,
 			Since = timeSinceBound,
-			Coroutine = function(pendingTask)		
+			Coroutine = function(schedule)		
 				local now = workspace:GetServerTimeNow()
 				if meta._DataCache[key] and meta._DataCache[key].__bounds then
 					meta._DataCache[key].__bounds.since = now -- update the timestamp of subscription
 				end
 				
 				write_wal_immediately(key, meta._CurrentWALDataStore, meta._CurrentDataStore)
-				pendingTask -= 1
+				
+				if schedule and schedule.pending ~= nil then
+					schedule.pending -= 1
+				end
 			end
 		}
 
@@ -1111,17 +1116,27 @@ local function InPlayerData(meta, Key)
 		local rejected = {}
 
 		if SegmentIndex then
-			local success = check_validation(record.Key, SegmentIndex, Data)
-			if not success then
+			local success, value = check_validation(record.Key, SegmentIndex, Data)
+			
+			if success then
+				meta._DataCache[record.Key][SegmentIndex] = value
+			else
 				table.insert(rejected, SegmentIndex)
 			end
 		else
+			local accepted = deepclone(meta._DataCache[record.Key])
+			
 			for thisData, thisValue in pairs(Data) do
-				local success = check_validation(record.Key, thisData, thisValue)
-				if not success then
+				local success, value = check_validation(record.Key, thisData, thisValue)
+				
+				if success then
+					accepted[thisData] = value
+				else
 					table.insert(rejected, thisData)
 				end
 			end
+			
+			meta._DataCache[record.Key] = accepted
 		end
 
 		if #rejected > 0 then
@@ -1149,8 +1164,7 @@ local function InPlayerData(meta, Key)
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
 
-		local before = meta._DataCache[record.Key]
-		local clone = deepclone(before)
+		local clone = deepclone(meta._DataCache[record.Key])
 		local resultFunction = WritingFunction(clone)
 
 		if type(resultFunction) ~= "table" then
@@ -1161,27 +1175,25 @@ local function InPlayerData(meta, Key)
 		end
 
 		local rejected = {}
-		for thisData in pairs(before) do
-			if resultFunction[thisData] == nil then
-				meta._DataCache[record.Key][thisData] = nil
-			end
-		end
+		local filteredObjs = {}
 
 		for thisData, thisValue in pairs(resultFunction) do
-			local success = check_validation(record.Key, thisData, thisValue)
-
-			if not success then
-				table.insert(rejected, thisData)
-			end
+			filteredObjs[thisData] = thisValue
+		end
+		
+		for thisData, thisValue in pairs(filteredObjs) do
+			local accepted, value = check_validation(record.Key, thisData, thisValue)
+			
+			if not accepted then table.insert(rejected, thisData) continue end
+			meta._DataCache[record.Key][thisData] = value
 		end
 
 		if #rejected > 0 then
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
-
+		
 		enqueue_save(record.Key, data, wal, backup, false)
-
 		return true
 	end
 
@@ -1312,19 +1324,27 @@ local function InPlayerData(meta, Key)
 		local rejected = {}
 
 		if SegmentIndex then
-			local success = check_validation(record.Key, SegmentIndex, Data)
+			local success, value = check_validation(record.Key, SegmentIndex, Data)
 
-			if not success then
+			if success then
+				meta._DataCache[record.Key][SegmentIndex] = value
+			else
 				table.insert(rejected, SegmentIndex)
 			end
 		else
-			for thisData, thisValue in pairs(Data) do
-				local success = check_validation(record.Key, thisData, thisValue)
+			local accepted = deepclone(meta._DataCache[record.Key])
 
-				if not success then
+			for thisData, thisValue in pairs(Data) do
+				local success, value = check_validation(record.Key, thisData, thisValue)
+
+				if success then
+					accepted[thisData] = value
+				else
 					table.insert(rejected, thisData)
 				end
 			end
+
+			meta._DataCache[record.Key] = accepted
 		end
 
 		if #rejected > 0 then
@@ -1368,8 +1388,7 @@ local function InPlayerData(meta, Key)
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
 
-		local before = meta._DataCache[record.Key]
-		local clone = deepclone(before)
+		local clone = deepclone(meta._DataCache[record.Key])
 		local resultFunction = WritingFunction(clone)
 
 		if type(resultFunction) ~= "table" then
@@ -1380,25 +1399,24 @@ local function InPlayerData(meta, Key)
 		end
 
 		local rejected = {}
-		for thisData in pairs(before) do
-			if resultFunction[thisData] == nil then
-				meta._DataCache[record.Key][thisData] = nil
-			end
-		end
-
+		local filteredObjs = {}
+		
 		for thisData, thisValue in pairs(resultFunction) do
-			local success = check_validation(record.Key, thisData, thisValue)
-
-			if not success then
-				table.insert(rejected, thisData)
-			end
+			filteredObjs[thisData] = thisValue
+		end
+		
+		for thisData, thisValue in pairs(filteredObjs) do
+			local accepted, value = check_validation(thisData, thisValue)
+			
+			if not accepted then table.insert(rejected, thisData) continue end
+			meta._DataCache[record.Key][thisData] = value
 		end
 
 		if #rejected > 0 then
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
-
+		
 		local filteredData = meta._DataCache[record.Key]
 		local status, _, message = write_wal_optionally(wal, data, backup, record.Key, filteredData)
 
@@ -1593,19 +1611,27 @@ local function InPlayerData(meta, Key)
 		local rejected = {}
 
 		if SegmentIndex then
-			local success = check_validation(record.Key, SegmentIndex, Data)
+			local success, value = check_validation(record.Key, SegmentIndex, Data)
 
-			if not success then
-				table.insert(rejected, Data)
+			if success then
+				meta._DataCache[record.Key][SegmentIndex] = value
+			else
+				table.insert(rejected, SegmentIndex)
 			end
 		else
-			for thisData, thisValue in pairs(Data) do
-				local success = check_validation(record.Key, thisData, thisValue)
+			local accepted = deepclone(meta._DataCache[record.Key])
 
-				if not success then
+			for thisData, thisValue in pairs(Data) do
+				local success, value = check_validation(record.Key, thisData, thisValue)
+
+				if success then
+					accepted[thisData] = value
+				else
 					table.insert(rejected, thisData)
 				end
 			end
+
+			meta._DataCache[record.Key] = accepted
 		end
 
 		if #rejected > 0 then
@@ -1633,8 +1659,7 @@ local function InPlayerData(meta, Key)
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
 
-		local before = meta._DataCache[record.Key]
-		local clone = deepclone(before)
+		local clone = deepclone(meta._DataCache[record.Key])
 		local resultFunction = WritingFunction(clone)
 
 		if type(resultFunction) ~= "table" then
@@ -1644,26 +1669,25 @@ local function InPlayerData(meta, Key)
 			return false
 		end
 
+		local filteredObjs = {}
 		local rejected = {}
-		for thisData in pairs(before) do
-			if resultFunction[thisData] == nil then
-				meta._DataCache[record.Key][thisData] = nil
-			end
-		end
 
 		for thisData, thisValue in pairs(resultFunction) do
-			local success = check_validation(record.Key, thisData, thisValue)
-
-			if not success then
-				table.insert(rejected, thisData)
-			end
+			filteredObjs[thisData] = thisValue
+		end
+		
+		for thisData, thisValue in pairs(filteredObjs) do
+			local success, value = check_validation(record.Key, thisData, thisValue)
+			
+			if not success then table.insert(rejected, thisData) continue end
+			meta._DataCache[record.Key][thisData] = value
 		end
 
 		if #rejected > 0 then
 			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
 		end
-
+		
 		enqueue_save(record.Key, data, wal, backup, true)
 
 		return true
@@ -1822,8 +1846,6 @@ local function InPlayerData(meta, Key)
 		meta._TrackedSchemas[record.Key] = trackedSchemas
 		meta._TrackedClamps[record.Key] = trackedClamps
 
-		local currentData = deepclone(meta._DataCache[record.Key])
-
 		-- Inserting a predication of data whereas the data can be written when the predicate fulfilled
 		function dummyMethods:InsertPredicate(ThisData : any, Predicate: (ThisValue: any) -> any)
 			trackedValidations[ThisData] = Predicate
@@ -1933,14 +1955,19 @@ local function InPlayerData(meta, Key)
 			
 			function connector:Wait()
 				local currentThread = coroutine.running()
-				local thread = task.spawn(function()
-					listener[record.Key][id] = function(...)
-						coroutine.resume(currentThread, ...)
-					end
-				end)
 				
-				coroutine.yield()
-				task.cancel(thread)
+				listener[record.Key][id] = function(...)
+					local args = table.pack(...)
+					
+					local success, err = pcall(Callback, table.unpack(args, 1, args.n))
+					task.spawn(currentThread, table.unpack(args, 1, args.n))
+
+					if not success then
+						error("[" .. meta.ErrorReasonNamespace .. "]: " .. err, 0)
+					end					
+				end
+				
+				return coroutine.yield()
 			end
 			
 			return connector
@@ -2445,6 +2472,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataSaving = {},
 		OnDataSaved = {},
 		OnDataArchived = {},
+		OnDataUnarchived = {},
 		OnDataRecovery = {},
 		OnDataCached = {},
 		OnDataRemoved = {},
@@ -2470,6 +2498,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataSaving = {},
 		OnDataSaved = {},
 		OnDataArchived = {},
+		OnDataUnarchived = {},
 		OnDataRecovery = {},
 		OnDataCached = {},
 		OnDataRemoved = {},
