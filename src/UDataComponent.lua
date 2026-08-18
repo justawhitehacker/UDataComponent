@@ -2,6 +2,18 @@
 -- A data component that can be used to store data in a way that is easy to use and manage
 
 --[[
+	== Informations ==
+	
+	Creator: @RaihanMan18 (Raihan Naufal Azmi)
+	Version: UDataComponent v1.0
+	Module-goal: DataStore wrapper
+	Created-since: 5 August 2026
+	License: MIT
+	
+	Written in Luau for Roblox
+	
+	== END ==
+	
 	SIMPLE DOCUMENTATION:
 	
 	Before that, I will tell you what's the differende between Safe, Force, and Normal (un-prefixed).
@@ -15,11 +27,15 @@
 	- Normal
 	--- This is method where the data handled normally by UDataComponent. Enququed, then commited, without locks. and affected by the cooldown ---
 	
-	-- Constructor --
+	== Constructor ==
+	
 	UDataComponent.InDataInfo(DataStoreName: string, scope : string?) : UDataComponentInfo
 	---- Creates a new UDataComponent info object, where all handler tables constructed ----
 	
-	-- UDataComponentInfo --
+	== END ==
+	
+	== UDataComponentInfo ==
+	
 	UDataComponentInfo:GetPlayerData(Key: number | string, Callbacks: {UDataComponentCallbackFunctions?}) : UDataComponentRecord
 	---- Gets the data of a player, allows you to access player's data level
 	
@@ -33,6 +49,104 @@
 	UDataComponentInfo.ValidationEnabled : boolean --> Allows to UDataComponent validate this data store before saving
 	UDataComponentInfo.CallbackEnabled : boolean --> Allows to UDataComponent listen the callbacks
 	UDataComponentInfo.RequestTimestampCooldown : number --> Minimum time between each request to the data store
+	UDataComponentInfo.DefaultDataLoadingAttempts : number --> Minimum attempts to load the data
+	UDataComponentInfo.DefaultDataLoadingYieldDuration : number --> Minimum duration to yield when loading data
+	UDataComponentInfo.WALEnabled : boolean --> Allows to UDataComponent to use Write Ahead Logging
+	UDataComponentInfo.DefaultSaveAttempts : number --> Minimum attempts to save the data
+	UDataComponentInfo.DefaultYieldAttempts : number --> Minimum duration to yield when saving data
+	UDataComponentInfo.MaxKeyLength : number --> Maximum key length
+	UDataComponentInfo.BackupEnabled : boolean --> Allows to UDataComponent to use backup data
+	UDataComponentInfo.BackupYieldDuration : number --> Minimum duration to yield when saving backup data
+	UDataComponentInfo.StrictlyUnallowDetaching : boolean --> Unallows UDataComponent to detach/delete data
+	UDataComponentInfo.BackupRemovedWhenDetached : boolean --> Removes the backup data when the data is detached
+	UDataComponentInfo.AutoSaveEnabled : boolean --> Enables the data to be saved automatically
+	UDataComponentInfo.AutoSaveInterval : number --> Interval to save the data
+	UDataComponentInfo.WALDataSuffix : string --> Suffix to the data key for Write Ahead Logging
+	UDataComponentInfo.WALMaxEntries : number --> Maximum entries in the Write Ahead Logging
+	UDataComponentInfo.BackupDataSuffix : string --> Suffix to the data key for backup data
+	UDataComponentInfo.ExclusiveAccessEnabled : boolean --> Allows to UDataComponent to use exclusive access
+	UDataComponentInfo.ExclusiveAccessExpiration : number --> Duration of exclusive data for each players since bound
+	UDataComponentInfo.SwappingEnabled : boolean --> Allows to UDataComponent to swap/transaction data between players
+	UDataComponentInfo.SwappingCooldown : number --> Minimum time between each swap/transaction request
+	UDataComponentInfo.CacheCleaningEnabled : boolean --> Enables the cache to be cleaned automatically
+	UDataComponentInfo.CacheCleaningInterval : number --> Interval to clean the cache
+	UDataComponentInfo.DataExpiredDuration : number --> Duration of data to be considered as expired
+	UDataComponentInfo.DataBlueprint : {any} --> Default data structure for template/blueprint
+	UDataComponentInfo.ErrorReasonNamespace : string --> Namespace of error of UDataComponent
+	UDataComponentInfo.LocalDataNamespace : string --> Namespace of local data of UDataComponent
+	UDataComponentInfo.MessagingEnabled : boolean --> Allows to UDataComponent to replicate the data to other servers
+	UDataComponentInfo.MessagingNamespace : string --> Namespace of broadcasting data to other servers
+	UDataComponentInfo.MessagingSendingCooldown : number --> Cooldown of each sending to other servers
+	UDataComponentInfo.MessagingReceivingCooldown : number --> Cooldown of each receiving from other servers
+	UDataComponentInfo.MessagingLocalListeningCooldown : number --> Cooldown of each local listening to other servers
+	UDataComponentInfo.ServerClaimerSuffix : string --> Suffix of server that currently claiming data of a player/key
+	UDataComponentInfo.ArchivationEnabled : boolean --> Allows to UDataComponent to use archivation when detached
+	UDataComponentInfo.ArchivationSuffix : string --> Suffix of archived data
+	UDataComponentInfo.MessagingDebugEnabled : boolean --> Enables the debug messages of broadcasting
+	UDataComponentInfo.MaxDataSavingPerTick : number --> Maximum data saving per tick
+	
+	== END ==
+	
+	== UDataComponentRecord ==
+	
+	UDataComponentRecord:Get(LoadRecovery? = false, ExclusivePlayer? = nil), returns (Status: boolean, Data: any)
+	-- Get the data record of current info --
+	-- When you used this function twice or more, this will return cache of data's record, to prevent boom request --
+	
+	-- !param LoadRecovery: boolean? = Invokes TryToRecover function to check if there was a record that haven't been commited, which is from WAL
+	-- !param ExclusivePlayer: Player? = Checking data with player, if this data was belong and exclusived to the player
+	
+	-> Example:
+	local currentData = info:GetPlayerData(plr.UserId)
+	local status, data = currentData:Get(true, plr) -- Get the data of player with recovery, recommended to be called on first-join or data load
+	
+	
+	
+	UDataComponentRecord:Save(Data: any, SegmentIndex: number? = nil), returns (Status: boolean)
+	-- Save the data record of current info --
+	-- Data will be cached first before commited to data store --
+	
+	-- !param Data: any = Current data to commit
+	-- !param SegmentIndex: number? = Index of table segment for data, as if used index to contain the data value
+	
+	-> Example:
+	local currentData = info:GetPlayerData(plr.UserId)
+	local isSuccess = currentData:Save({
+		Money = (Money or 0) + 100,
+		Items = (Items or 0) + 1,
+	})
+	
+	-> Example (if use SegmentIndex):
+	local currentData = info:GetPlayerData(plr.UserId)
+	local isMoneySuccess = currentData:Save(100, 1) -- Save the "Money" data of player with index of 1
+	local isItemsSuccess = currentData:Save(1, 2) -- Save the "Items" data of player with index of 2
+	
+	-- This will be { 100, 1 }, where you can access first index as "Money" and second index as "Items"
+	
+	
+	
+	UDataComponentRecord:Write(WritingFunction: (CurrentData: any) -> any), returns (Status: boolean)
+	-- Modify the partial data of current data record, before saved to data store --
+	-- Same as Save, data will be cached first before commited to data store --
+	
+	-- !param WritingFunction: (CurrentData: any) -> any = Function to modify the data
+		-- @param CurrentData: any = Current data to modify
+	-- !important: You should return the CurrentData in modifier function after modify the data
+	
+	-> Example:
+	local currentData = info:GetPlayerData(plr.UserId)
+	local isSuccess = currentData:Write(function(data)
+		data.Money += 100
+		data.Items += 1
+		
+		return data
+	end)
+	
+	
+	
+	UDataComponentRecord:Flush()
+
+	== END ==
 	
 --]]
 
@@ -146,7 +260,6 @@ export type UDataComponentInfo = {
 	CallbackEnabled : boolean,
 	RequestTimestampCooldown : number,
 	WALEnabled : boolean,
-	WritingDataAgeEnabled : boolean,
 	DefaultDataLoadingAttempts : number,
 	DefaultDataLoadingYieldDuration : number,
 	DefaultSaveAttempts : number,
@@ -167,8 +280,6 @@ export type UDataComponentInfo = {
 	SwappingCooldown : number,
 	CacheCleaningEnabled : boolean,
 	CacheCleaningInterval : number,
-	CanDataExpired : boolean,
-	DataExpiredDuration : number,
 	DataBlueprint : {any?},
 	ErrorReasonNamespace : string,
 	LocalDataNamespace : string,
@@ -182,7 +293,6 @@ export type UDataComponentInfo = {
 	ArchivationEnabled : boolean,
 	ArchivationSuffix : string,
 	MessagingDebugEnabled : boolean,
-	DefaultCacheCleanupInterval : number,
 	MaxDataSavingPerTick : number,
 }
 
@@ -2433,7 +2543,6 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self.ArchivationEnabled = true
 	self.ArchivationSuffix = "_archive"
 	self.MessagingDebugEnabled = false
-	self.DefaultCacheCleanupInterval = 300 -- 300 seconds
 	self.MaxDataSavingPerTick = 4
 
 	self._CurrentDataStore = DataStoreService:GetDataStore(DataStoreName, _scope)
