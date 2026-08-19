@@ -237,6 +237,7 @@ export type UDataComponentCallbackFunctions = {
 	OnDataBinding: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Data: any) -> ()) -> UDataComponentCallbackConnection,
 	OnDataUnbinding: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Data: any) -> ()) -> UDataComponentCallbackConnection,
 	OnDataBindExpired: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
+	OnDataBindRefreshed: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnCacheCleaned: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
 	OnTransactionBegin: (self: UDataComponentCallbackFunctions, Callback: (Key: string, WithKey: string) -> ()) -> UDataComponentCallbackConnection,
 	OnTransactionFiltered: (self: UDataComponentCallbackFunctions, Callback: (WhoKey: string, FilteredObject: any) -> ()) -> UDataComponentCallbackConnection,
@@ -268,7 +269,7 @@ export type UDataComponentInfo = {
 	BackupEnabled : boolean,
 	BackupYieldDuration : number,
 	StrictlyUnallowDetaching : boolean,
-	bBackupRemovedWhenDetached : boolean,
+	BackupRemovedWhenDetached : boolean,
 	AutoSaveEnabled : boolean,
 	AutoSaveInterval : number,
 	WALDataSuffix : string,
@@ -1908,8 +1909,14 @@ local function InPlayerData(meta, Key)
 		end
 		
 		local data = deepclone(currentData)
-		if data.__bounds == nil then 
+		if data.__bounds == nil or data.__bounds.id == nil then 
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is not bound to any player.")
+			return false 
+		end
+		
+		local plr = Players:GetPlayerFromCharacter(data.__bounds.id)
+		if not plr then 
+			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Unable to find player who belongs current data.")
 			return false 
 		end
 		
@@ -1919,7 +1926,8 @@ local function InPlayerData(meta, Key)
 			return CurrentData
 		end)
 		
-		meta._BoundRegistry[record.Key].Since = now
+		bind_exclusive_access(record.Key, record, now, plr)
+		dispatch(record.Key, "OnDataBindRefreshed")
 		return true
 	end
 
@@ -2127,6 +2135,10 @@ local function InPlayerData(meta, Key)
 		
 		function callbackMethods:OnDataUnbinding(Callback: (Key: string, Data: any) -> ()) : UDataComponentCallbackConnection
 			return registerCallback("OnDataUnbinding", Callback)
+		end
+		
+		function callbackMethods:OnDataBindRefreshed(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
+			return registerCallback("OnDataBindRefreshed", Callback)
 		end
 		
 		function callbackMethods:OnDataBindExpired(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
@@ -2587,6 +2599,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataRemoved = {},
 		OnDataBinding = {},
 		OnDataUnbinding = {},
+		OnDataBindRefreshed = {},
 		OnDataBindExpired = {},
 		OnCacheCleaned = {},
 		OnTransactionBegin = {},
@@ -2613,6 +2626,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		OnDataRemoved = {},
 		OnDataBinding = {},
 		OnDataUnbinding = {},
+		OnDataBindRefreshed = {},
 		OnDataBindExpired = {},
 		OnCacheCleaned = {},
 		OnTransactionBegin = {},
