@@ -1900,26 +1900,26 @@ local function InPlayerData(meta, Key)
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
 			return false
 		end
-		
+				
 		local currentData = meta._DataCache[record.Key]
 		local now = workspace:GetServerTimeNow()
 		if not currentData then 
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Unable to renew the exclusive access subscription, it seems you called the renew function before the data loaded.")
 			return false 
 		end
-		
+				
 		local data = deepclone(currentData)
 		if data.__bounds == nil or data.__bounds.id == nil then 
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is not bound to any player.")
 			return false 
 		end
-		
-		local plr = Players:GetPlayerFromCharacter(data.__bounds.id)
+				
+		local plr = Players:GetPlayerByUserId(data.__bounds.id)
 		if not plr then 
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Unable to find player who belongs current data.")
 			return false 
 		end
-		
+				
 		record:SafeWrite(function(CurrentData)
 			CurrentData.__bounds.since = now
 			
