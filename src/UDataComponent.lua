@@ -1908,7 +1908,7 @@ local function InPlayerData(meta, Key)
 		end
 		
 		local data = deepclone(currentData)
-		if data.__bounds == nil or meta._BoundRegistry[record.Key] == nil then 
+		if data.__bounds == nil then 
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is not bound to any player.")
 			return false 
 		end
