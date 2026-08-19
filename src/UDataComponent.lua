@@ -311,7 +311,8 @@ export type UDataComponentBroadcast = {
 }
 
 export type UDataComponent = {
-	InDataInfo: (DataStoreName: string, Scope: string?) -> UDataComponentInfo,
+	InDataInfo: (DataStoreName: string, Scope: string?, Configurations: {any?}) -> UDataComponentInfo,
+	QuickSetup: (DataStoreName: string, Scope: string?, Configurations: {any?}) -> UDataComponentInfo,
 }
 
 local function InPlayerData(meta, Key)
@@ -652,7 +653,7 @@ local function InPlayerData(meta, Key)
 	local function call_autosave(key, data : DataStore, wal : DataStore, backup : DataStore)
 		local calledSince = workspace:GetServerTimeNow()
 
-		while meta.Enabled and meta._DataCache[key] and meta._AutosaveTimestamp[key] and not meta._AutosaveDied do
+		while meta.Enabled and meta._DataCache[key] and meta._AutosaveTimestamp[key] and not meta._ShutdownCalled do
 			local now = workspace:GetServerTimeNow()
 			local currentData = meta._DataCache[key]
 
@@ -676,7 +677,7 @@ local function InPlayerData(meta, Key)
 			meta._LockTimers[ownerId] = coroutine.create(function()
 				local startedSince = workspace:GetServerTimeNow()
 
-				while meta.Enabled and meta._LockTimers[ownerId] do
+				while meta.Enabled and meta._LockTimers[ownerId] and not meta._ShutdownCalled do
 					local tickedNow = workspace:GetServerTimeNow()
 					if tickedNow - startedSince >= timeout then
 						record:ReleaseLockSession(ownerId)						
@@ -716,11 +717,11 @@ local function InPlayerData(meta, Key)
 	end
 
 	local function run_save_queue()
-		if meta._IsRunning then return end
+		if meta._IsRunning or meta._ShutdownCalled then return end
 		meta._IsRunning = true
 
 		task.spawn(function()
-			while meta.Enabled do
+			while meta.Enabled and not meta._ShutdownCalled do
 				local count = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
 				local processed = 0
 				local max = meta.MaxDataSavingPerTick
@@ -887,7 +888,7 @@ local function InPlayerData(meta, Key)
 
 	local function create_exclusive_safety(key)
 		Players.PlayerRemoving:Connect(function(player)
-			if meta._AutosaveDied then return end
+			if meta._ShutdownCalled then return end
 			
 			local now = workspace:GetServerTimeNow()
 			for key, bound in pairs(meta._BoundRegistry) do
@@ -919,7 +920,7 @@ local function InPlayerData(meta, Key)
 		end)
 
 		game:BindToClose(function()
-			meta._AutosaveDied = true
+			meta._ShutdownCalled = true
 
 			local schedule = { pending = 0 }
 			for key, bound in pairs(meta._BoundRegistry) do
@@ -976,11 +977,11 @@ local function InPlayerData(meta, Key)
 	end
 	
 	local function run_exclusive_timer(data, wal, backup)
-		if meta._ExclusiveTimerCalled then return end
+		if meta._ExclusiveTimerCalled or meta._ShutdownCalled then return end
 		meta._ExclusiveTimerCalled = true
 
 		task.spawn(function()
-			while meta.Enabled and meta.ExclusiveAccessEnabled do
+			while meta.Enabled and meta.ExclusiveAccessEnabled and not meta._ShutdownCalled do
 				local now = workspace:GetServerTimeNow()
 
 				for key, bound in pairs(meta._BoundRegistry) do
@@ -2575,7 +2576,7 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
 
 	self._ExclusiveTimerCalled = false
-	self._AutosaveDied = false
+	self._ShutdownCalled = false
 	self._ExclusiveSafetyCalled = false
 	self._IsRunning = false
 	self._CacheCleaningCalled = false
