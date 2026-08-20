@@ -1564,8 +1564,7 @@ local function InPlayerData(meta, Key)
 		local obtainedData = nil
 
 		if meta._DataCache[record.Key] then
-			obtainedData = meta._DataCache[record.Key]
-			local clone = deepclone(meta._DataCache[record.Key])
+			obtainedData = deepclone(meta._DataCache[record.Key])
 			
 			if obtainedData.__bounds then
 				local id = obtainedData.__bounds.id
@@ -1594,7 +1593,7 @@ local function InPlayerData(meta, Key)
 				status = true
 			end
 
-			dispatch(record.Key, "OnDataLoaded", clone)
+			dispatch(record.Key, "OnDataLoaded", obtainedData)
 			return status, obtainedData
 		end
 
