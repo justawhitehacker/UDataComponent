@@ -518,7 +518,7 @@ local function InPlayerData(meta, Key)
 
 		local clone = deepclone(currentData)
 		dispatch(key, "OnDataSaved", clone)
-
+		
 		return true, dataSuccess, "write_data_success"
 	end
 
@@ -565,7 +565,7 @@ local function InPlayerData(meta, Key)
 
 		local dataSuccess, _, _ = write_data(data, key, currentData)
 		local backupSuccess, _, _ = write_backup(backup, key, currentData)
-
+		
 		if dataSuccess and backupSuccess and walSuccess then
 			pcall(function()
 				wal:RemoveAsync(key)
@@ -618,7 +618,7 @@ local function InPlayerData(meta, Key)
 			write_data(data, key, currentData)
 			write_backup(backup, key, currentData)
 		end
-
+		
 		for i, pending in ipairs(meta._SavePendingQueue) do
 			if pending.Key == key then
 				table.remove(meta._SavePendingQueue, i)
@@ -639,7 +639,7 @@ local function InPlayerData(meta, Key)
 		if now - lastTouch < interval then return false end
 
 		call_flush(key, data, wal, backup)
-		
+				
 		meta._DataCache[key] = nil
 		meta._AutosaveTimestamp[key] = nil
 		meta._GetTimestamp[key] = nil
@@ -664,7 +664,7 @@ local function InPlayerData(meta, Key)
 					local _, _, _ = write_data(data, key, currentData)
 					local _, _, _ = write_backup(backup, key, currentData)
 				end
-
+								
 				calledSince = now
 			end
 
@@ -683,7 +683,7 @@ local function InPlayerData(meta, Key)
 						record:ReleaseLockSession(ownerId)						
 						break
 					end
-
+					
 					task.wait(1)
 				end
 
@@ -726,7 +726,7 @@ local function InPlayerData(meta, Key)
 				local processed = 0
 				local max = meta.MaxDataSavingPerTick
 
-				while #meta._SavePendingQueue > 0 and processed < max and count > 0 do
+				while #meta._SavePendingQueue > 0 and processed < max and count > 0 and not meta._ShutdownCalled do
 					local obj = table.remove(meta._SavePendingQueue, 1) -- First in first out
 
 					local currentData = meta._DataCache[obj.Key]
@@ -737,7 +737,7 @@ local function InPlayerData(meta, Key)
 							
 							latestData.__version = (latestData.__version or 0) + 1
 							local status, _, message = write_wal_optionally(obj.WAL, obj.Data, obj.Backup, obj.Key, latestData)
-
+							
 							if message == "wal_disabled" then
 								local _, _, _ = write_data(obj.Data, obj.Key, latestData)
 								local _, _, _ = write_backup(obj.Backup, obj.Key, latestData)
@@ -853,7 +853,7 @@ local function InPlayerData(meta, Key)
 			if not success then
 				dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to save WAL immediately, meaning the last data record haven't happened.")
 			end
-		else
+					else
 			local success, err = pcall(function()
 				data:UpdateAsync(key, function(old)
 					return currentData
@@ -888,15 +888,13 @@ local function InPlayerData(meta, Key)
 
 	local function create_exclusive_safety(key)
 		Players.PlayerRemoving:Connect(function(player)
-			if meta._ShutdownCalled then return end
-			
 			local now = workspace:GetServerTimeNow()
 			for key, bound in pairs(meta._BoundRegistry) do
 				if bound.UserId == player.UserId then
 					if not meta._DataCache[key] or not meta._DataCache[key].__bounds then continue end
 					meta._DataCache[key].__bounds.since = now
 					
-					call_flush(key, meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
+					write_wal_immediately(key, meta._CurrentWALDataStore, meta._CurrentDataStore)
 					meta._BoundRegistry[key] = nil
 				end
 			end
@@ -923,7 +921,7 @@ local function InPlayerData(meta, Key)
 			meta._ShutdownCalled = true
 
 			local schedule = { pending = 0 }
-			for key, bound in pairs(meta._BoundRegistry) do
+			for key, bound in pairs(meta._BoundRegistry) do				
 				schedule.pending += 1
 				task.spawn(bound.Coroutine, schedule)
 			end
