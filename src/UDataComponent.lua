@@ -181,16 +181,16 @@ export type UDataComponentValidationDummy = {
 
 export type UDataComponentRecord = {
 	Get: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?) -> any,
-	Save: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> boolean,
-	Write: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> boolean,
-	Flush: (self: UDataComponentRecord) -> (),
-	Recover: (self: UDataComponentRecord) -> boolean,
-	Detach : (self: UDataComponentRecord) -> (),
-	ForceSave: (self: UDataComponentRecord, AlongCooldown: number, Data: any, SegmentIndex: number?) -> boolean,
-	ForceWrite: (self: UDataComponentRecord, AlongCooldown: number, WritingFunction: (CurrentData: any) -> any) -> boolean,
+	Save: (self: UDataComponentRecord, Data: any, SegmentIndex: number?, ExclusivePlayer: Player?) -> boolean,
+	Write: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any, ExclusivePlayer: Player?) -> boolean,
+	Flush: (self: UDataComponentRecord, ExclusivePlayer: Player?) -> (),
+	TryToRecover: (self: UDataComponentRecord) -> boolean,
+	Detach : (self: UDataComponentRecord, ExclusivePlayer: Player?) -> (),
+	ForceSave: (self: UDataComponentRecord, AlongCooldown: number, Data: any, SegmentIndex: number?, ExclusivePlayer: Player?) -> boolean,
+	ForceWrite: (self: UDataComponentRecord, AlongCooldown: number, WritingFunction: (CurrentData: any) -> any, ExclusivePlayer: Player?) -> boolean,
 	SafeGet: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> boolean,
-	SafeSave: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
-	SafeWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> boolean,
+	SafeSave: (self: UDataComponentRecord, Data: any, SegmentIndex: number?, ExclusivePlayer: Player?) -> (),
+	SafeWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any, ExclusivePlayer: Player?) -> boolean,
 	AcquireLockSession: (self: UDataComponentRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, any), 
 	ReleaseLockSession: (self: UDataComponentRecord, OwnerIdentity: string) -> (),
 	IsSessionLocked: (self: UDataComponentRecord, OwnerIdentity: string) -> boolean,
@@ -868,7 +868,13 @@ local function InPlayerData(meta, Key)
 
 	local function broadcast_owner_claimer(key, plrId, now)
 		if not meta.MessagingEnabled then return end
-
+		
+		meta._ClaimedKeys[key] = {
+			UserId = plrId,
+			Since = now,
+			ServerId = game.JobId,
+		}
+		
 		local topic = meta.MessagingNamespace .. meta.ServerClaimerSuffix
 		local message = {
 			PossessedKey = key,
@@ -880,12 +886,6 @@ local function InPlayerData(meta, Key)
 		local success, err = pcall(function()
 			MessagingService:PublishAsync(topic, message)
 		end)
-		
-		meta._ClaimedKeys[key] = {
-			UserId = plrId,
-			Since = now,
-			ServerId = game.JobId,
-		}
 
 		if not success then
 			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to claim ownership of key.")
@@ -902,6 +902,7 @@ local function InPlayerData(meta, Key)
 
 					write_wal_immediately(key, meta._CurrentWALDataStore, meta._CurrentDataStore)
 					meta._BoundRegistry[key] = nil
+					meta._ClaimedKeys[key] = nil
 				end
 			end
 
@@ -945,6 +946,7 @@ local function InPlayerData(meta, Key)
 		if not meta._BoundRegistry[key] then return end
 
 		meta._BoundRegistry[key] = nil
+		meta._ClaimedKeys[key] = nil
 		dispatch(key, "OnDataUnbinding", meta._DataCache[key])
 	end
 
@@ -1407,12 +1409,6 @@ local function InPlayerData(meta, Key)
 		if meta.StrictlyUnallowDetaching then
 			return false, "unallowed_detach"
 		end
-
-		local currentData = meta._DataCache[record.Key]
-		if not currentData then
-			return false, "not_cached"
-		end
-		local clone = deepclone(currentData)
 		
 		if ExclusivePlayer then
 			if not is_server_own_this_key(record.Key, ExclusivePlayer.UserId) then
@@ -1421,6 +1417,12 @@ local function InPlayerData(meta, Key)
 			end
 		end
 
+		local currentData = meta._DataCache[record.Key]
+		if not currentData then
+			return false, "not_cached"
+		end
+		local clone = deepclone(currentData)
+		
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
 
@@ -1447,6 +1449,7 @@ local function InPlayerData(meta, Key)
 		end
 
 		meta._BoundRegistry[record.Key] = nil
+		meta._ClaimedKeys[record.Key] = nil
 		meta._SaveTimestamp[record.Key] = nil
 		meta._GetTimestamp[record.Key] = nil
 		meta._DataCache[record.Key] = nil
