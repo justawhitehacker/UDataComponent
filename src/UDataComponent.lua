@@ -880,17 +880,16 @@ local function InPlayerData(meta, Key)
 		local success, err = pcall(function()
 			MessagingService:PublishAsync(topic, message)
 		end)
-
-		if not success then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to claim ownership of key.")
-			return
-		end
 		
 		meta._ClaimedKeys[key] = {
 			UserId = plrId,
 			Since = now,
 			ServerId = game.JobId,
 		}
+
+		if not success then
+			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to claim ownership of key.")
+		end
 	end
 
 	local function create_exclusive_safety(key)
@@ -1227,7 +1226,14 @@ local function InPlayerData(meta, Key)
 		return true, obtainedData
 	end
 
-	function record:Save(Data: any, SegmentIndex: number?)
+	function record:Save(Data: any, SegmentIndex: number?, ExclusivePlayer: Player?)
+		if ExclusivePlayer then
+			if not is_server_own_this_key(record.Key, ExclusivePlayer.UserId) then
+				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot commit the data, because the data is belonging to another server.")
+				return false
+			end
+		end
+		
 		local now = workspace:GetServerTimeNow()
 		if meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then 
 			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Save() halted, waiting for cooldown.")
@@ -1282,7 +1288,14 @@ local function InPlayerData(meta, Key)
 		return true
 	end
 
-	function record:Write(WritingFunction: (CurrentData: any) -> any)
+	function record:Write(WritingFunction: (CurrentData: any) -> any, ExclusivePlayer: Player?)
+		if ExclusivePlayer then
+			if not is_server_own_this_key(record.Key, ExclusivePlayer.UserId) then
+				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot commit the data, because the data is belonging to another server.")
+				return false
+			end
+		end
+		
 		local now = workspace:GetServerTimeNow()
 		if meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
 		meta._SaveTimestamp[record.Key] = now
@@ -1292,7 +1305,7 @@ local function InPlayerData(meta, Key)
 		if not meta._DataCache[record.Key] then
 			return false
 		end
-
+		
 		local wal = meta._CurrentWALDataStore
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
@@ -1330,10 +1343,17 @@ local function InPlayerData(meta, Key)
 		return true
 	end
 
-	function record:Flush()
+	function record:Flush(ExclusivePlayer: Player?)
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
 		local wal = meta._CurrentWALDataStore
+		
+		if ExclusivePlayer then
+			if not is_server_own_this_key(record.Key, ExclusivePlayer.UserId) then
+				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot commit the data, because the data is belonging to another server.")
+				return
+			end
+		end
 
 		return call_flush(record.Key, data, wal, backup)
 	end
@@ -1383,7 +1403,7 @@ local function InPlayerData(meta, Key)
 		return true, "success"
 	end
 
-	function record:Detach()
+	function record:Detach(ExclusivePlayer: Player?)
 		if meta.StrictlyUnallowDetaching then
 			return false, "unallowed_detach"
 		end
@@ -1393,6 +1413,13 @@ local function InPlayerData(meta, Key)
 			return false, "not_cached"
 		end
 		local clone = deepclone(currentData)
+		
+		if ExclusivePlayer then
+			if not is_server_own_this_key(record.Key, ExclusivePlayer.UserId) then
+				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot commit the data, because the data is belonging to another server.")
+				return false, "suspicious_server"
+			end
+		end
 
 		local data = meta._CurrentDataStore
 		local backup = meta._CurrentBackupDataStore
@@ -1400,7 +1427,7 @@ local function InPlayerData(meta, Key)
 		if meta.ArchivationEnabled then
 			local archive = meta._CurrentArchivedDataStore
 			pcall(function()
-				archive:UpdateAsync(record.Key .. "_" .. workspace:GetServerTimeNow(), function()
+				archive:UpdateAsync(record.Key, function()
 					return currentData
 				end)
 			end)
@@ -1439,7 +1466,14 @@ local function InPlayerData(meta, Key)
 		return true, "success"
 	end
 
-	function record:ForceSave(AlongCooldown : boolean, Data: any, SegmentIndex: number?)
+	function record:ForceSave(AlongCooldown : boolean, Data: any, SegmentIndex: number?, ExclusivePlayer: Player?)
+		if ExclusivePlayer then
+			if not is_server_own_this_key(record.Key, ExclusivePlayer.UserId) then
+				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot commit the data, because the data is belonging to another server.")
+				return false
+			end
+		end
+		
 		local now = workspace:GetServerTimeNow()
 		if AlongCooldown and meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
 		meta._SaveTimestamp[record.Key] = now
@@ -1506,7 +1540,14 @@ local function InPlayerData(meta, Key)
 		return true
 	end
 
-	function record:ForceWrite(AlongCooldown : boolean, WritingFunction: (CurrentData: any) -> any)
+	function record:ForceWrite(AlongCooldown : boolean, WritingFunction: (CurrentData: any) -> any, ExclusivePlayer: Player?)
+		if ExclusivePlayer then
+			if not is_server_own_this_key(record.Key, ExclusivePlayer.UserId) then
+				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot commit the data, because the data is belonging to another server.")
+				return false
+			end
+		end
+		
 		local now = workspace:GetServerTimeNow()
 		if AlongCooldown and meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
 		meta._SaveTimestamp[record.Key] = now
@@ -1725,7 +1766,14 @@ local function InPlayerData(meta, Key)
 		return status, obtainedData
 	end
 
-	function record:SafeSave(Data: any, SegmentIndex: number?)
+	function record:SafeSave(Data: any, SegmentIndex: number?, ExclusivePlayer: Player?)
+		if ExclusivePlayer then
+			if not is_server_own_this_key(record.Key, ExclusivePlayer.UserId) then
+				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot commit the data, because the data is belonging to another server.")
+				return false
+			end
+		end
+		
 		local now = workspace:GetServerTimeNow()
 		if meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
 		meta._SaveTimestamp[record.Key] = now
@@ -1776,7 +1824,14 @@ local function InPlayerData(meta, Key)
 		return true
 	end
 
-	function record:SafeWrite(WritingFunction: (CurrentData: any) -> any)
+	function record:SafeWrite(WritingFunction: (CurrentData: any) -> any, ExclusivePlayer: Player?)
+		if ExclusivePlayer then
+			if not is_server_own_this_key(record.Key, ExclusivePlayer.UserId) then
+				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot commit the data, because the data is belonging to another server.")
+				return false
+			end
+		end
+		
 		local now = workspace:GetServerTimeNow()
 		if meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
 		meta._SaveTimestamp[record.Key] = now
@@ -1953,7 +2008,12 @@ local function InPlayerData(meta, Key)
 			return CurrentData
 		end)
 
-		bind_exclusive_access(record.Key, record, now, plr)
+		if meta._BoundRegistry[record.Key] then
+			meta._BoundRegistry[record.Key].Since = now
+		end
+		
+		broadcast_owner_claimer(record.Key, plr.UserId, now)
+		
 		dispatch(record.Key, "OnDataBindRefreshed")
 		return true
 	end
