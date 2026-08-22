@@ -308,6 +308,18 @@ local function throw(record, message)
 	
 end
 
+local function reconcile(meta : __UDCInfo_Internal, data : {any}, blueprint : {any})
+	for key, value in pairs(blueprint) do
+		if data[key] == nil then
+			data[key] = value
+		end
+		
+		if data[key] == nil and typeof(value) == "table" then
+			reconcile(meta, data[key], value)
+		end
+	end
+end
+
 local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	local entry
 	local ok, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
