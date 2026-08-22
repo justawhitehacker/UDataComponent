@@ -136,12 +136,15 @@ export type __UDCInfo_Internal = {
 	_CurrentDataStore : DataStore,
 	_CurrentWALDataStore : DataStore,
 	_CurrentArchivedDataStore : DataStore,
+	
+	_CompressedBlueprint : buffer,
 
 	_SaveTimestamp : { any? },
 	_SwapTimestamp : { any? },
 	_AutosaveTimestamp : { any? },
 	_SavePendingQueue : { any? },
 	_ObtainPendingQueue : { any? },
+	_UnreadyData : { any? },
 	_DataCache : { any? },
 	_BoundRegistry : { any? },
 	_LockSessions : any,
@@ -226,29 +229,41 @@ export type UDCRecord = {
 	
 	Awake: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) IMPORTANT POINT, this load the record from the datastore, and must be called when player is joing the experience
 	-- @return boolean -- Status of the loading the data, true if success
+	
 	Ready: (UDCRecord: UDCRecord, TimeoutFindPlayer: number?) -> boolean, -- (Suspending) IMPORANT POINT, this must be called before the data can be used, where UDC is evaluating everything fromn the data and ownership, before the data can be used
 	-- @return boolean -- Status when the data of this player is ready after evaluating and hard-checking, if true the data is ready to be used
+	
 	Standby: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) IMPORTANT POINT, this will be called automatically when player is leaving the experience, or server shutdown, where the data will be saved and released, must be called after the record is ready, which after "Ready()" returns true. 
-												-- This will use WAL to save data, to prevent request "Boom", and will easily and automatically recovered by UDC from Awake()
+	-- This will use WAL to save data, to prevent request "Boom", and will easily and automatically recovered by UDC from Awake()
+	
+	Sleep: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) IMPORTANT POINT, this is where you can release the bounds of this server from data, then commited into datastore
+	-- @info -- You can call this when you're needing a manual control over releasing session, meanwhile this was called automatically when Standby() triggered
 	-- @return boolean -- Status of the releasing the data, true if success
+	
 	Save: (UDCRecord: UDCRecord, Data: any?, SegmentIndex: number?) -> boolean, -- (Suspending) this is saving data where the data must be an over-all data, which is the previous recored that haven't been edited also must be saved too, will pushed into save pending queue then changed the read data
 	-- @param Data: any? -- Data to commit, if nil, current read data will be used as data to commit
 	-- @param SegmentIndex: number? -- Where the current data is contained in an index to
 	-- @return boolean -- Status of the saving data, true if success, but true in here isn't meaning the data is actually commited
+	
 	Write: (UDCRecord: UDCRecord, WritingFunction: (CurrentData: any) -> ()) -> boolean, -- (Suspending) this is how you can save the data with partial update, where you don't need to commit all data to write when you just need one or two or more datas to edit
 	-- @param WritingFunction: (CurrentData: any) -> () -- Function that used as Write session over the data
 	-- @return boolean -- Status of the writing data, true if success, but true in here isn't meaning the data is actually commited
+	
 	ForceSave: (UDCRecord: UDCRecord, Data: any, SegmentIndex: number?) -> boolean, -- (Suspending) same as record:Save(...), but this will commit into datastore immediately
 	-- @param Data: any -- Data to commit
 	-- @param SegmentIndex: number? -- Where the current data is contained in an index to
 	-- @return boolean -- Status of the saving data, true if success
+
 	ForceWrite: (UDCRecord: UDCRecord, WritingFunction: (CurrentData: any) -> ()) -> boolean, -- (Suspending) same as record:Write(...), but this will commit into datastore immediately
 	-- @param WritingFunction: (CurrentData: any) -> () -- Function that used as Write session over the data
 	-- @return boolean -- Status of the writing data, true if success
+	
 	Detach: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) DANGEROUS, this will destroy/erase the record data from datastore and cache, but if archivation is true, the data will be archived
 	-- @return boolean -- Status of the erasing the data, true if successfully detached/removed the data
+	
 	Unarchive: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) Call the removed data from datastore, where the data will be immediately written into cache
 	-- @return boolean -- Status of the unarchiving data, true if success
+	
 }
 
 export type UDCEvent = {
@@ -322,16 +337,16 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 				end
 			end
 
-			CurrentData = CurrentData or deepclone(meta.DataBlueprint)
+			CurrentData = CurrentData or entry or meta._CompressedBlueprint
 
 			if entry and entry.__version and entry.__version > (CurrentData.__version or 0) then
 				CurrentData = entry
 			end
 
 			CurrentData.__bounds = {
-				id = CurrentData.__bounds and CurrentData.__bounds.id,
+				id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerId,
 				serverid = ServerId,
-				since = CurrentData.__bounds and CurrentData.__bounds.since,
+				since = CurrentData.__bounds and CurrentData.__bounds.since or now,
 				lastheartbeat = now,
 			}
 			return CurrentData
@@ -339,7 +354,9 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	end)
 
 	if success and result and entry then
-		meta._CurrentWALDataStore:RemoveAsync(record.Key)
+		pcall(function()  
+			meta._CurrentWALDataStore:RemoveAsync(record.Key)
+		end)
 	end
 
 	return result
@@ -382,15 +399,17 @@ local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
 						return nil
 					end
 				end
+				
+				CurrentData = CurrentData or backupData or meta._CompressedBlueprint
 
-				if backupData and backupData.__version and backupData.__version > (CurrentData.__version or 0) then
+				if backupData and backupData.__version and backupData.__version > (CurrentData and CurrentData.__version or 0) then
 					CurrentData = backupData
 				end
 
 				CurrentData.__bounds = {
-					id = CurrentData.__bounds and CurrentData.__bounds.id,
+					id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerId,
 					serverid = ServerId,
-					since = CurrentData.__bounds and CurrentData.__bounds.since,
+					since = CurrentData.__bounds and CurrentData.__bounds.since or now,
 					lastheartbeat = now,
 				}
 				return CurrentData
@@ -406,39 +425,43 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 	meta._IsObtainingRunning = true
 	
 	RunService.Heartbeat:Connect(function(_)
-		if meta.Enabled and UDataComponent.Enabled then
-			local obtain = meta._ObtainPendingQueue
+		if not meta.Enabled or not UDataComponent.Enabled then return end -- Preventing dead UDataComponent to do commands
+		
+		local obtain = meta._ObtainPendingQueue
+		local perTick = meta.MaxDataObtainingPerTick
+
+		while #obtain > 0 and meta._CurrentLoadWorkers < meta.MaxConcurrentLoadWorkers do
+			local first = table.remove(obtain, 1)
 
 			local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
 			local obtainBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.GetAsync)
-			local perTick = meta.MaxDataObtainingPerTick
 
-			if budget >= perTick and obtainBudget >= 2 and #obtain > 0 and meta._CurrentLoadWorkers <= meta.MaxConcurrentLoadWorkers then -- If there is no budget, then don't run the queue
-				local first = table.remove(obtain, 1)
-				
-				if first.Meta.Owner and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
-					task.spawn(first.Thread, false, nil)
-					return
-				end
-				
-				meta._CurrentLoadWorkers += 1
-				task.spawn(function()
-					local success, result = pcall(load_data, meta, first.Meta)
-					
-					if not success then -- Probably happened when the data is failed to be loaded, fallback to the backup
-						success, result = pcall(fallback_backup, meta, first.Meta)
-					end
-					
-					meta._CurrentLoadWorkers -= 1
-					task.spawn(first.Thread, success, result)
-				end)
+			if budget < perTick or obtainBudget < 2 then
+				break -- No budget left, stops current load request until next frame
 			end
+
+			if first.Meta.Owner and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
+				task.spawn(first.Thread, false, nil) -- Player left, cancel the load request
+				continue
+			end
+
+			meta._CurrentLoadWorkers += 1 -- Workers in working
+			task.spawn(function()
+				local success, result = pcall(load_data, meta, first.Meta)
+
+				if not success then -- Probably happened when the data is failed to be loaded, fallback to the backup
+					success, result = pcall(fallback_backup, meta, first.Meta)
+				end
+
+				meta._CurrentLoadWorkers -= 1 -- Workers finised the work
+				task.spawn(first.Thread, success, result) -- Continue the thread, regardless of the result
+			end)
 		end
 	end)
 end
 
 local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
-	run_load_queue(meta)
+	run_load_queue(meta) -- First-time run the load queue if it's not running
 	
 	local currentThread = coroutine.running()
 	table.insert(meta._ObtainPendingQueue, {
@@ -446,44 +469,161 @@ local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
 		Thread = currentThread,
 	})
 	
-	return coroutine.yield()
+	return coroutine.yield() -- Yield until the data is loaded, and returns the status and loaded data
 end
 
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
 	local record = {}
-	record.Key = key
-	record.Owner = owner
-	record.IsArchived = false
-	record.Event = nil
-	record.Validation = nil
-	record.Swap = nil
-	record.Messaging = nil
-	record.Version = 0
-	record.Data = nil
+	record.Key = key -- This is the key of the record
+	record.Owner = owner -- This is the owner of the record
+	record.IsArchived = false -- This is to indicate if the record is archived or not
+	record.Event = nil -- Utils of events for this record
+	record.Validation = nil -- Utils to create validation for this record
+	record.Swap = nil -- Utils to swap data with other record
+	record.Messaging = nil -- Utils to Broadcasting to other servers
+	record.Version = 0 -- This is the version of the data, it will be increased when the data is saved
+	record.Data = nil -- This is the data of the record
+	record.CurrentState = "Asleep"
 	
+	-- State machines: Asleep -> WakingUp -> Ready -> Sleeping || Asleep
+	-- Difference of Asleep and Sleeping, Asleep is when the data is loaded first time, meanwhile Sleeping is when the data is released and saved, but can be called by Awake again
+	
+	local clone = deepclone(meta.DataBlueprint)
+	local compressedBp = Compressor.Compress(clone, meta.CompressionLevel)
+	
+	meta._CompressedBlueprint = compressedBp
+	
+	-- Clone of data template/blueprint	
 	local function get_blueprint()
-		return deepclone(meta.DataBlueprint)
+		return meta._CompressedBlueprint
 	end
+	
+	-- Real flows usage:
+	-- Awake() -> Ready() -> Standby() || Sleep()
+	
+	-- Use Standby() if want the data releasing and saving data automaticaly by UDC
+	-- Use Sleep() if you want to handle the data releasing and saving data manually
+	-- Actually, Sleep() is already used inside of Standby()
+	
+	-- CAUTION: If you ever tried to access record.Data after releasing, like after Sleep() or Standby(). You will return nothing but nil, because the data already released and should be gone from this server session
 	
 	-- Should be called first, this is where the player's data record is awake and loaded
 	-- In Awake, also checks if this server owns the data, it will check if current owner was this player
+	-- SUSPENDING (YIELDABLE), where Awake waits for dequeue session until the data is loaded
 	function record:Awake()
+		if record.CurrentState ~= "Asleep" or record.CurrentState ~= "Sleeping" then
+			return false
+		end
+		
 		local success, result = enqueue_load(meta, record)
 		
-		if not success then -- Probably happened when the data is failed to be loaded, fallback to the backup
-			
-		elseif success and not result then -- Probably happened when the data is not owner of current player OR this record is not belong to this server
-			
-		elseif success and result then -- Data is successfully loaded, whether it's actual data or blueprint
-			
+		if success and not result then
+			meta._UnreadyData[record.Key] = nil
+			return false
+		elseif success and result then
+			record.CurrentState = "WakingUp"
+			meta._UnreadyData[record.Key] = result
+			return true
 		end
+		
+		meta._UnreadyData[record.Key] = nil
+		return false
 	end
 	
-	function record:Ready(TimeoutFindPlayer: number?)
+	-- After the data record is awake, we need to make the data is actually ready to be used
+	-- I made the data compressed into buffer to reduce the size of data
+	-- Here we are, Ready() called to make a hard-checking and evaluating every security and data details
+	-- Then the data will be decompressed and record.Data can be accessed to get the read data
+	-- SUSPENDING (YIELDABLE), where Ready waits for checking every details until its done checking and applied to cache
+	function record:Ready(FindingPlayerTimeout: number?)
+		-- Whether the data is already waking up or not, if not, maybe cannot ready or already running
+		if record.CurrentState ~= "WakingUp" then
+			return false
+		end
 		
+		local now = workspace:GetServerTimeNow()
+		local unready = meta._UnreadyData[record.Key]
+		
+		-- Checking if the raw/unready data already loaded
+		if not unready then
+			return false
+		end
+		
+		-- Checking if essential elements of data are existing
+		if not unready.__vision or not unready.__bounds or not unready.__data then
+			meta._UnreadyData[record.Key] = nil
+			return false
+		end
+		
+		-- Checking if bound elements in the data are existed
+		if not unready.__bounds or not unready.__bounds.id or not unready.__bounds.since or not unready.__bounds.serverid then
+			meta._UnreadyData[record.Key] = nil
+			return false
+		end
+		
+		-- Checking if the data is owned by this server
+		if unready.__bounds.serverid ~= ServerId then
+			meta._UnreadyData[record.Key] = nil
+			return false
+		end
+		
+		-- Checking if the data is owned by this player
+		if record.Owner and record.Owner.UserId ~= unready.__bounds.id then
+			meta._UnreadyData[record.Key] = nil
+			return false
+		end
+		
+		-- Checking if the data is still bound to this player
+		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
+		if now - unready.__bounds.since > timeout then
+			meta._UnreadyData[record.Key] = nil
+			return false
+		end
+		
+		-- Checking if player is still in the server
+		local playerFound = false
+		while not playerFound do
+			if record.Owner and Players:GetPlayerByUserId(record.Owner.UserId) then
+				playerFound = true
+			end
+			
+			-- If timeout is set, then it's not ready yet
+			if workspace:GetServerTimeNow() - now > FindingPlayerTimeout then
+				meta._UnreadyData[record.Key] = nil
+				return false
+			end
+			
+			task.wait(1)
+		end
+		
+		local compressedData = unready.__data
+		local success, data = pcall(function()
+			return Compressor.Decompress(compressedData)
+		end)
+		
+		-- Checking if the data is successfully decompressed
+		if not success then
+			meta._UnreadyData[record.Key] = nil
+			return false
+		end
+		
+		-- Reconcilate the data with the blueprint, to prevent data corruption or data loss
+		reconcile(record, data, meta.DataBlueprint)
+		
+		-- Apply the data to the cache
+		record.Data = data -- Data is now ready to be used
+		record.CurrentState = "Ready" -- Current state is ready to do things
+		record.Version = meta._UnreadyData[record.Key].__vision or 0 -- Set the version of this record to real data version
+		meta._UnreadyData[record.Key] = nil -- Remove the unready data, because the data is ready
+		
+		return true
 	end
 	
 	function record:Standby()
+		
+	end
+	
+	function record:Sleep()
 		
 	end
 	
@@ -521,7 +661,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	local storageKey = DataStoreName .. "-" .. Scope
 	local infoStorage = InfosStorage[storageKey] or {}
 	
-	local self = setmetatable(InfosStorage, UDataComponent)
+	local self = setmetatable(infoStorage, UDataComponent)
 	
 	self.Name = DataStoreName
 	self.Scope = Scope
@@ -568,6 +708,8 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._CurrentDataStore = DataStoreService:GetDataStore(DataStoreName, Scope)
 	self._CurrentWALDataStore = DataStoreService:GetDataStore(DataStoreName..self.WALDataSuffix, Scope)
 	self._CurrentArchivedDataStore = DataStoreService:GetDataStore(DataStoreName..self.ArchivationSuffix, Scope)
+	
+	self._CompressedBlueprint = nil
 
 	self._SaveTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SwapTimestamp = {} -- { [Key: string] = timestamp: number }
