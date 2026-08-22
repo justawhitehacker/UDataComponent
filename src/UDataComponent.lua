@@ -13,6 +13,7 @@ local Players = game:GetService("Players")
 local MessagingService = game:GetService("MessagingService")
 local HttpService = game:GetService("HttpService")
 
+local Compressor = require(script.Compressor)
 local Mutex = require(script.Mutex)
 local ScopedMutex = require(script.ScopedMutex)
 
@@ -24,6 +25,18 @@ local ConnectionTest = DataStoreService:GetDataStore("ConnectionTest-" .. PlaceI
 local InfosStorage = {}
 
 UDataComponent.Enabled = true
+
+-- Data Structure:
+--[[
+PlayerRecord:
+	__version : number -> Version of current data
+	__bounds : {Bindings} -> Information about the bound of this data
+		-- id : number -> ID of the player who owns this data
+		-- since : number -> Time since this player bound or own this data
+		-- lastheartbeat : number -> Time since the last heartbeat sent for this data, meaning the server is still alive
+		-- serverid : string? -> ServerID (JobID) of this data, where this id contains the id of server who claimed this data
+	__data : any -> Data of this player
+--]]
 
 -- Standard UDataComponent level
 export type UDataComponent = {
@@ -86,6 +99,7 @@ export type UDCInfo = {
 	CacheCleaningInterval : number,-- Interval between each cache cleaning
 	DataBlueprint : {any?}, -- Blueprint for the data, where when a new player joins, the data will be filled with the blueprint as template or first data
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
+	CompressionLevel : number, -- Compression level for the data
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
 	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
@@ -94,7 +108,11 @@ export type UDCInfo = {
 	MessagingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
 	ArchivationEnabled : boolean, -- If this UDataComponent's info allowed to use archivation, where the data will be moved to the archived data store after detaching
 	ArchivationSuffix : string, -- Suffixed to the DataStore name for the archived data,
-	MaxDataSavingPerTick : number, -- Maximum data saving per tick in FIFO queue
+	MaxDataSavingPerTick : number, -- Maximum data saving per tick in FIFO queue,
+	MaxDataObtainingPerTick : number, -- Maximum data obtaining per tick in FIFO queue,
+	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
+	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
+	StaleServerClaimingTime : number, -- Duration for the server to claim the data of other server
 }
 
 -- info level helper for internal...
@@ -123,6 +141,7 @@ export type __UDCInfo_Internal = {
 	_SwapTimestamp : { any? },
 	_AutosaveTimestamp : { any? },
 	_SavePendingQueue : { any? },
+	_ObtainPendingQueue : { any? },
 	_DataCache : { any? },
 	_BoundRegistry : { any? },
 	_LockSessions : any,
@@ -131,8 +150,12 @@ export type __UDCInfo_Internal = {
 	_ExclusiveTimerCalled : boolean,
 	_ShutdownCalled : boolean,
 	_ExclusiveSafetyCalled : boolean,
-	_IsRunning : boolean,
+	_IsSaveRunning : boolean,
+	_IsObtainingRunning : boolean,
 	_CacheCleaningCalled : boolean,
+	
+	_CurrentLoadWorkers : number,
+	_CurrentSaveWorkers : number,
 
 	_TrackedValidations : { any? },
 	_TrackedSchemas : { any? },
@@ -166,6 +189,7 @@ export type __UDCInfo_Internal = {
 	CacheCleaningInterval : number,-- Interval between each cache cleaning
 	DataBlueprint : {any?}, -- Blueprint for the data, where when a new player joins, the data will be filled with the blueprint as template or first data
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
+	CompressionLevel : number, -- Compression level for the data, 1-22, default 10
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
 	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
@@ -174,7 +198,11 @@ export type __UDCInfo_Internal = {
 	MessagingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
 	ArchivationEnabled : boolean, -- If this UDataComponent's info allowed to use archivation, where the data will be moved to the archived data store after detaching
 	ArchivationSuffix : string, -- Suffixed to the DataStore name for the archived data,
-	MaxDataSavingPerTick : number, -- Maximum data saving per tick in FIFO queue
+	MaxDataSavingPerTick : number, -- Maximum data saving per tick in FIFO queue,
+	MaxDataObtainingPerTick : number, -- Maximum data obtaining per tick in FIFO queue,
+	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
+	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
+	StaleServerClaimingTime : number, -- Duration for the server to claim the data if the owner is unknown
 }
 
 -- Record level, where the data record is accessed here
@@ -265,49 +293,160 @@ local function throw(record, message)
 	
 end
 
-local function try_to_recover(pointer : __UDCInfo_Internal, record : UDCRecord)
-	if not pointer.WALEnabled then
-		return false
+local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
+	local entry
+	local ok, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
+	if meta.WALEnabled and ok then
+		entry = result
 	end
-	
-	local wal = pointer._CurrentWALDataStore
-	local data = pointer._CurrentDataStore
-	
-	local WALEntry = wal:GetAsync(record.Key)
-	if not WALEntry then
-		throw(record, "There is no WAL Entry to recover the data.")
-		return false
-	end
-	
-	local _attempts = 0
-	
-	local success, result
-	repeat
-		success, result = pcall(function()
-			return data:UpdateAsync(record.Key, function(currentData)
-				if WALEntry and WALEntry.__version and WALEntry.__version > (currentData.__version or 0) then
-					currentData = WALEntry
+
+	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	local now = workspace:GetServerTimeNow()
+	local attempts = 0
+
+	local success, result = pcall(function()
+		return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+			if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+				local bounds = CurrentData.__bounds
+				local id = CurrentData.__bounds.id
+				local serverid = CurrentData.__bounds.serverid
+				local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+				local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
+
+				local isDifferentOwner = thisOwnerId ~= id
+				local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+
+				if isDifferentOwner or isDifferentServer then
+					return nil
 				end
+			end
 
-				return currentData
-			end)
+			CurrentData = CurrentData or deepclone(meta.DataBlueprint)
+
+			if entry and entry.__version and entry.__version > (CurrentData.__version or 0) then
+				CurrentData = entry
+			end
+
+			CurrentData.__bounds = {
+				id = CurrentData.__bounds and CurrentData.__bounds.id,
+				serverid = ServerId,
+				since = CurrentData.__bounds and CurrentData.__bounds.since,
+				lastheartbeat = now,
+			}
+			return CurrentData
 		end)
+	end)
 
-		if not success then
-			throw(record, "Unable to recover the data from WAL, trying again...")
-			_attempts += 1
-			
-			task.wait(pointer.DefaultDataLoadingYieldDuration or 3)
-		end
-	until success or _attempts >= pointer.DefaultDataLoadingAttempts or result ~= nil
+	if success and result and entry then
+		meta._CurrentWALDataStore:RemoveAsync(record.Key)
+	end
+
+	return result
+end
+
+local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
+	if not meta.BackupEnabled then
+		return nil
+	end
+	
+	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	local now = workspace:GetServerTimeNow()
+	
+	local success, result = pcall(function()
+		return meta._CurrentDataStore:ListVersionsAsync(record.Key, Enum.SortDirection.Descending)
+	end)
 	
 	if success and result then
-		wal:RemoveAsync(record.Key)
-		return true
+		local lastData = result:GetCurrentPage()[1]
+		if lastData == nil then return nil end
+		
+		local ok, backupData = pcall(function()
+			return meta._CurrentDataStore:GetVersionAsync(record.Key, lastData.Version)
+		end)
+		
+		if ok and backupData then
+			return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+					local bounds = CurrentData.__bounds
+					local id = CurrentData.__bounds.id
+					local serverid = CurrentData.__bounds.serverid
+					local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
+
+					local isDifferentOwner = thisOwnerId ~= id
+					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+
+					if isDifferentOwner or isDifferentServer then
+						return nil
+					end
+				end
+
+				if backupData and backupData.__version and backupData.__version > (CurrentData.__version or 0) then
+					CurrentData = backupData
+				end
+
+				CurrentData.__bounds = {
+					id = CurrentData.__bounds and CurrentData.__bounds.id,
+					serverid = ServerId,
+					since = CurrentData.__bounds and CurrentData.__bounds.since,
+					lastheartbeat = now,
+				}
+				return CurrentData
+			end)
+		end
 	end
 	
-	throw(record, "Unable to recover the data from WAL, the data is lost.")
-	return false
+	return nil
+end
+
+local function run_load_queue(meta : __UDCInfo_Internal)
+	if meta._IsObtainingRunning then return end
+	meta._IsObtainingRunning = true
+	
+	RunService.Heartbeat:Connect(function(_)
+		if meta.Enabled and UDataComponent.Enabled then
+			local obtain = meta._ObtainPendingQueue
+
+			local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+			local obtainBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.GetAsync)
+			local perTick = meta.MaxDataObtainingPerTick
+
+			if budget >= perTick and obtainBudget >= 2 and #obtain > 0 and meta._CurrentLoadWorkers <= meta.MaxConcurrentLoadWorkers then -- If there is no budget, then don't run the queue
+				local first = table.remove(obtain, 1)
+				
+				if first.Meta.Owner and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
+					task.spawn(first.Thread, false, nil)
+					return
+				end
+				
+				meta._CurrentLoadWorkers += 1
+				task.spawn(function()
+					local success, result = pcall(load_data, meta, first.Meta)
+					
+					if not success then -- Probably happened when the data is failed to be loaded, fallback to the backup
+						success, result = pcall(fallback_backup, meta, first.Meta)
+					end
+					
+					meta._CurrentLoadWorkers -= 1
+					task.spawn(first.Thread, success, result)
+				end)
+			end
+		end
+	end)
+end
+
+local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
+	run_load_queue(meta)
+	
+	local currentThread = coroutine.running()
+	table.insert(meta._ObtainPendingQueue, {
+		Meta = record,
+		Thread = currentThread,
+	})
+	
+	return coroutine.yield()
 end
 
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
@@ -329,109 +468,13 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- Should be called first, this is where the player's data record is awake and loaded
 	-- In Awake, also checks if this server owns the data, it will check if current owner was this player
 	function record:Awake()
-		local recovered = try_to_recover(meta, record)
-		if not recovered then
-			throw(record, "Failed to recover the data, it seems there is no history of WAL entry.")
-		end
+		local success, result = enqueue_load(meta, record)
 		
-		local _attempts = 0
-		local success, data
-		local thisOwnerID = record.Owner and record.Owner.UserId
-		
-		local now = workspace:GetServerTimeNow()
-		repeat
-			success, data = pcall(function()
-				return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
-					-- Slight changes on bounds data will make a significant change on the data
-					-- ServerID will be released when final save of data happened
-					-- Released ServerID would be a nil, instead of an empty string
-					
-					-- So that, when serverid is nil, meaning the data hasn't been claimed, a quick server would claim this and assign their JobID into bounds
-					if CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
-						local bounds = CurrentData.__bounds
-						local id = CurrentData.__bounds.id
-						local serverId = bounds.serverid
-						local lastHeartbeat = CurrentData.__bounds.heartbeat or 0
-						
-						-- This is a check for a server that is still active, and avoiding two servers to claim this data
-						local isStale = now - lastHeartbeat > 90
-						
-						-- If-Result: When the player of this record is not same as the owner of this recond, AND
-						-- Bound ServerID is not same as this server's ServerID (ServerID means JobID), AND
-						-- Staled data, where a server is not live THEN
-						-- Returns NIL
-						if thisOwnerID ~= id and serverId ~= ServerId and not isStale then
-							return nil
-						end
-					end
-					
-					-- Passed Result: Quick-server will claim this data
-					-- Supossed that a data is not bound to any server, but this server
-					-- So, it would make another server who tries to get the data, will be blocked
-					CurrentData = CurrentData or get_blueprint()
-					CurrentData.__bounds = {
-						id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerID, -- This is UserID of the owner that claimed this data, static claimed OR when there is no claimer
-						serverid = ServerId, -- This is ServerID claiming
-						since = CurrentData.__bounds and CurrentData.__bounds.since or now, -- This is time since this data is claimed
-						lastHeartbeat = now -- Always update the time of heartbeat, to check if the server who claimed assumed still alive
-					}
-					
-					return CurrentData
-				end)
-			end)
+		if not success then -- Probably happened when the data is failed to be loaded, fallback to the backup
 			
-			if not success then
-				throw(record, "Failed to load the data, with reason: " .. tostring(data))
-				_attempts += 1
-				
-				task.wait(meta.DefaultDataLoadingYieldDuration or 3)
-			end
-		until _attempts >= meta.DefaultDataLoadingAttempts or success or data ~= nil
-		
-		if not success then
-			throw(record, "Failed to load the data, it seems there is no data to load. Trying to use backup...")
+		elseif success and not result then -- Probably happened when the data is not owner of current player OR this record is not belong to this server
 			
-			local lastVersions = meta._CurrentDataStore:ListVersionsAsync(record.Key, Enum.SortDirection.Descending)
-			local lastVersion = lastVersions:GetCurrentPage()[1]
-			
-			if lastVersion then
-				local backupData, _ = meta._CurrentDataStore:GetVersionAsync(record.Key, lastVersion.Version)
-				
-				if backupData then
-					local success, result = pcall(function()
-						return meta._CurrentDataStore:UpdateAsync(record.Key, function(oldData)
-							if backupData.__bounds and backupData.__bounds.id and backupData.__bounds.serverid then
-								local bounds = backupData.__bounds
-								local id = backupData.__bounds.id
-								local serverid = backupData.__bounds.serverid
-								local lastHeartbeat = backupData.__bounds.lastHeartbeat or 0
-								
-								local isStale = now - lastHeartbeat > 90
-								
-								if id ~= thisOwnerID and serverid ~= ServerId and not isStale then
-									return nil
-								end
-							end
-							
-							backupData = backupData or get_blueprint()
-							backupData.__bounds = {
-								id = thisOwnerID,
-								serverid = ServerId,
-								since = now,
-								lastHeartbeat = now
-							}
-							return backupData
-						end)
-					end)
-					
-					if success then
-						
-					end
-				end
-			end
-		elseif data == nil then
-			
-		elseif data then
+		elseif success and result then -- Data is successfully loaded, whether it's actual data or blueprint
 			
 		end
 	end
@@ -507,6 +550,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.CacheCleaningInterval = 300
 	self.DataBlueprint = {}
 	self.ErrorReasonNamespace = "UDataComponent"
+	self.CompressionLevel = 10
 	self.LocalDataNamespace = "LUDataComponent"
 	self.MessagingEnabled = false
 	self.MessagingNamespace = "UDCBroadcast"
@@ -516,6 +560,10 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.ArchivationEnabled = true
 	self.ArchivationSuffix = "_archived"
 	self.MaxDataSavingPerTick = 4
+	self.MaxDataObtainingPerTick = 4
+	self.MaxConcurrentSaveWorkers = 5
+	self.MaxConcurrentLoadWorkers = 5
+	self.StaleServerClaimingTime = 90
 
 	self._CurrentDataStore = DataStoreService:GetDataStore(DataStoreName, Scope)
 	self._CurrentWALDataStore = DataStoreService:GetDataStore(DataStoreName..self.WALDataSuffix, Scope)
@@ -525,6 +573,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._SwapTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SavePendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup } }
+	self._ObtainPendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup } }
 	self._UnreadyData = {} -- { [Key: string] = true }
 	self._DataCache = {} -- { [Key: string] = Data: any }
 	self._BoundRegistry = {} -- { [Key: string] = table }
@@ -534,8 +583,12 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._ExclusiveTimerCalled = false
 	self._ShutdownCalled = false
 	self._ExclusiveSafetyCalled = false
-	self._IsRunning = false
+	self._IsSaveRunning = false
+	self._IsObtainingRunning = false
 	self._CacheCleaningCalled = false
+	
+	self._CurrentLoadWorkers = 0
+	self._CurrentSaveWorkers = 0
 
 	self._TrackedValidations = {} -- { [Key] = { Member = ValidationFunction, ... } }
 	self._TrackedSchemas = {} -- { [Key] = { Member = ValidationFunction, ... } }
