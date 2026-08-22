@@ -97,7 +97,7 @@ export type UDCInfo = {
 	MaxDataSavingPerTick : number, -- Maximum data saving per tick in FIFO queue
 }
 
--- Info level, where UDataComponent see the configurations
+-- info level helper for internal...
 export type __UDCInfo_Internal = {
 	Name: string, -- Name of the data store from this info
 	Scope: string, -- Scope of the data store from this info
@@ -114,6 +114,32 @@ export type __UDCInfo_Internal = {
 	-- You can say, in UDC, local data is just "global data of this data store" or "global record"
 	ViewLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
 	-- This is where you can view the record of local data
+	
+	_CurrentDataStore : DataStore,
+	_CurrentWALDataStore : DataStore,
+	_CurrentArchivedDataStore : DataStore,
+
+	_SaveTimestamp : { any? },
+	_SwapTimestamp : { any? },
+	_AutosaveTimestamp : { any? },
+	_SavePendingQueue : { any? },
+	_DataCache : { any? },
+	_BoundRegistry : { any? },
+	_LockSessions : any,
+	_LocalBroadcastListeners : { any? },
+
+	_ExclusiveTimerCalled : boolean,
+	_ShutdownCalled : boolean,
+	_ExclusiveSafetyCalled : boolean,
+	_IsRunning : boolean,
+	_CacheCleaningCalled : boolean,
+
+	_TrackedValidations : { any? },
+	_TrackedSchemas : { any? },
+	_TrackedClamps : { any? },
+
+	_UDataComponentCallbacks : { any? },
+	_UDataComponentDynamicCallbacks : { any? },
 
 	-- Configurations
 	Enabled : boolean, -- If this UDataComponent's info enabled to be used 
@@ -217,6 +243,73 @@ export type UDCEventConnector = {
 	
 }
 
+local function deepclone(tab)
+	if typeof(tab) ~= "table" then
+		return tab
+	end		
+	local newTab = {}
+
+	for k, v in pairs(tab) do
+		newTab[k] = deepclone(v)
+	end
+
+	return newTab
+end
+
+local function dispatch(record, eventName, ...)
+	local args = table.pack(...)
+	
+end
+
+local function throw(record, message)
+	
+end
+
+local function try_to_recover(pointer : __UDCInfo_Internal, record : UDCRecord)
+	if not pointer.WALEnabled then
+		return false
+	end
+	
+	local wal = pointer._CurrentWALDataStore
+	local data = pointer._CurrentDataStore
+	
+	local WALEntry = wal:GetAsync(record.Key)
+	if not WALEntry then
+		throw(record, "There is no WAL Entry to recover the data.")
+		return false
+	end
+	
+	local _attempts = 0
+	
+	local success, result
+	repeat
+		success, result = pcall(function()
+			return data:UpdateAsync(record.Key, function(currentData)
+				if WALEntry and WALEntry.__version and WALEntry.__version > (currentData.__version or 0) then
+					currentData = WALEntry
+				end
+
+				return currentData
+			end)
+		end)
+
+		if not success then
+			throw(record, "Unable to recover the data from WAL, trying again...")
+			_attempts += 1
+			
+			task.wait(pointer.DefaultDataLoadingYieldDuration or 3)
+		end
+	until success or _attempts >= pointer.DefaultDataLoadingAttempts or result ~= nil
+	
+	if success and result then
+		wal:RemoveAsync(record.Key)
+		return true
+	end
+	
+	throw(record, "Unable to recover the data from WAL, the data is lost.")
+	return false
+end
+
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
 	local record = {}
 	record.Key = key
@@ -228,6 +321,97 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.Messaging = nil
 	record.Version = 0
 	record.Data = nil
+	
+	local function get_blueprint()
+		return deepclone(meta.DataBlueprint)
+	end
+	
+	-- Should be called first, this is where the player's data record is awake and loaded
+	-- In Awake, also checks if this server owns the data, it will check if current owner was this player
+	function record:Awake()
+		local recovered = try_to_recover(meta, record)
+		if not recovered then
+			throw(record, "Failed to recover the data, it seems there is no history of WAL entry.")
+		end
+		
+		local _attempts = 0
+		local success, data
+		
+		local now = workspace:GetServerTimeNow()
+		repeat
+			success, data = pcall(function()
+				return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+					if CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+						local bounds = CurrentData.__bounds
+						local id = CurrentData.__bounds.id
+						local serverId = bounds.serverid
+						local lastHeartbeat = CurrentData.__bounds.heartbeat or 0
+						
+						local isStale = now - lastHeartbeat > 90
+						
+						if record.Owner and record.Owner.UserId ~= id and serverId ~= ServerId and not isStale then
+							return nil
+						end
+					end
+					
+					CurrentData = CurrentData or get_blueprint()
+					CurrentData.__bounds = {
+						id = CurrentData.__bounds and CurrentData.__bounds.id,
+						serverid = ServerId,
+						since = CurrentData.__bounds and CurrentData.__bounds.since,
+						lastHeartbeat = now						
+					}
+					return CurrentData
+				end)
+			end)
+			
+			if not success then
+				throw(record, "Failed to load the data, with reason: " .. tostring(data))
+				_attempts += 1
+				
+				task.wait(meta.DefaultDataLoadingYieldDuration or 3)
+			end
+		until _attempts >= meta.DefaultDataLoadingAttempts or success or data ~= nil
+		
+		if data == nil then
+			throw(record, "Failed to load the data, it seems there is no data to load. Trying to use backup...")
+			
+			local lastVersions = meta._CurrentDataStore:ListVersionsAsync(record.Key, Enum.SortDirection.Descending)
+			
+		end
+	end
+	
+	function record:Ready(TimeoutFindPlayer: number?)
+		
+	end
+	
+	function record:Standby()
+		
+	end
+	
+	function record:Save(Data: any?, SegmentIndex: number?)
+		
+	end
+	
+	function record:Write(WritingFunction: (CurrentData: any) -> ())
+		
+	end
+	
+	function record:ForceSave(Data: any?, SegmentIndex: number?)
+		
+	end
+	
+	function record:ForceWrite(WritingFunction: (CurrentData: any) -> ())
+		
+	end
+	
+	function record:Detach()
+		
+	end
+	
+	function record:Unarchive()
+		
+	end
 	
 	return record	
 end
