@@ -26,6 +26,16 @@ local InfosStorage = {}
 
 UDataComponent.Enabled = true
 
+-- State Machines:
+--[[
+	"Asleep" -> where the record is not owned by any server or remaining untouched yet
+	"WakingUp" -> where the record is claimed by a server, but not yet confirmed by the server
+	"Ready" -> where the record is ready to be used
+	"Sleeping" -> where the record is released by the server, but not yet confirmed by the server
+	"Died" -> where the record is getting detached, along the release
+	"Reborn" -> where the record is getting unarchived, and start to awake
+--]]
+
 -- Data Structure:
 --[[
 PlayerRecord:
@@ -36,6 +46,7 @@ PlayerRecord:
 		-- lastheartbeat : number -> Time since the last heartbeat sent for this data, meaning the server is still alive
 		-- serverid : string? -> ServerID (JobID) of this data, where this id contains the id of server who claimed this data
 	__data : any -> Data of this player
+	__flag : string (should be char) -> flag that indicates whether the data of this record was compressed ('C') or real ('R'), so that UDC will handle it
 --]]
 
 -- Standard UDataComponent level
@@ -100,6 +111,7 @@ export type UDCInfo = {
 	DataBlueprint : {any?}, -- Blueprint for the data, where when a new player joins, the data will be filled with the blueprint as template or first data
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
 	CompressionLevel : number, -- Compression level for the data
+	CompressionThreshold : number, -- Threshold for the data to be compressed, in bytes
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
 	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
@@ -193,6 +205,7 @@ export type __UDCInfo_Internal = {
 	DataBlueprint : {any?}, -- Blueprint for the data, where when a new player joins, the data will be filled with the blueprint as template or first data
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
 	CompressionLevel : number, -- Compression level for the data, 1-22, default 10
+	CompressionThreshold : number, -- Threshold for the data to be compressed, in bytes
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
 	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
@@ -286,6 +299,7 @@ export type UDCEventConnector = {
 	
 }
 
+-- for deepcloning table
 local function deepclone(tab)
 	if typeof(tab) ~= "table" then
 		return tab
@@ -299,62 +313,79 @@ local function deepclone(tab)
 	return newTab
 end
 
+-- to call event
 local function dispatch(record, eventName, ...)
 	local args = table.pack(...)
 	
 end
 
+-- to call specific, OnDataError event, with message
 local function throw(record, message)
 	
 end
 
+-- to reconcile data, where the data will be reconciled with the blueprint
 local function reconcile(meta : __UDCInfo_Internal, data : {any}, blueprint : {any})
 	for key, value in pairs(blueprint) do
-		if data[key] == nil then
-			data[key] = value
+		if data[key] == nil and typeof(value) == "table" then
+			-- if the value is a table, then we need to reconcile it too, with recursive function
+			reconcile(meta, data[key], value)
 		end
 		
-		if data[key] == nil and typeof(value) == "table" then
-			reconcile(meta, data[key], value)
+		if data[key] == nil then
+			-- if the data is nil and not a table type from blueprint, then we need to set it to the value
+			data[key] = value
 		end
 	end
 end
 
+-- to load the data, where it's running in a session
 local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
-	local entry
+	local entry -- empty entry
+	
+	-- Checking if WAL Entry is exist
 	local ok, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
-	if meta.WALEnabled and ok then
+	if meta.WALEnabled and ok and result then
+		-- Change the entry to the WAL Entry
 		entry = result
 	end
 
 	local thisOwnerId = record.Owner and record.Owner.UserId or 0
 	local now = workspace:GetServerTimeNow()
 	local attempts = 0
-
+	
+	-- Use UpdateAsync to load data, also handle the WAL
 	local success, result = pcall(function()
 		return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+			-- Checking if current data have these bound elements
 			if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
 				local bounds = CurrentData.__bounds
-				local id = CurrentData.__bounds.id
-				local serverid = CurrentData.__bounds.serverid
-				local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
-
+				local id = CurrentData.__bounds.id -- UserId of the player who owns this data
+				local serverid = CurrentData.__bounds.serverid -- ServerID (JobID) of server whose this data to commit
+				local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0 -- Time when the server claimed this data
+				
+				-- Checking if the server is still alive
 				local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
-
-				local isDifferentOwner = thisOwnerId ~= id
-				local isDifferentServer = serverid and serverid ~= ServerId and not isStale
-
+								
+				local isDifferentOwner = thisOwnerId ~= id -- Checking if the owner is different
+				local isDifferentServer = serverid and serverid ~= ServerId and not isStale -- Checking if the server is different and not dead/stale
+				
+				-- If the data is owned by a different player or a different server, return nil to force an invalid result
 				if isDifferentOwner or isDifferentServer then
 					return nil
 				end
 			end
-
+			
+			-- If the data is not exist, or the data is exist but the server is dead/stale, use the WAL entry, or the compressed blueprint
 			CurrentData = CurrentData or entry or meta._CompressedBlueprint
-
+			
+			-- Checking WAL entry if exist and has a newer version than the current data
 			if entry and entry.__version and entry.__version > (CurrentData.__version or 0) then
+				-- Use the WAL entry if it's newer
 				CurrentData = entry
 			end
-
+			
+			-- Rebinding the data with the new bounds, if some elements are already belongs to a player or something, it remains same
 			CurrentData.__bounds = {
 				id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerId,
 				serverid = ServerId,
@@ -364,8 +395,10 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 			return CurrentData
 		end)
 	end)
-
+	
+	-- Checking if the result is success and has a valid data, and WAL entry is existed
 	if success and result and entry then
+		-- Remove the WAL entry after successfully commiting the data
 		pcall(function()  
 			meta._CurrentWALDataStore:RemoveAsync(record.Key)
 		end)
@@ -484,6 +517,12 @@ local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
 	return coroutine.yield() -- Yield until the data is loaded, and returns the status and loaded data
 end
 
+local function compare_and_compress(meta : __UDCInfo_Internal, data : { any? })
+	local buff, flag = Compressor.TryToCompress(data, meta.CompressionLevel, meta.CompressionThreshold)
+	
+	return buff, flag
+end
+
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
 	local record = {}
 	record.Key = key -- This is the key of the record
@@ -501,7 +540,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- Difference of Asleep and Sleeping, Asleep is when the data is loaded first time, meanwhile Sleeping is when the data is released and saved, but can be called by Awake again
 	
 	local clone = deepclone(meta.DataBlueprint)
-	local compressedBp = Compressor.Compress(clone, meta.CompressionLevel)
+	local compressedBp, bpFlag = compare_and_compress(meta, clone)
 	
 	meta._CompressedBlueprint = compressedBp
 	
@@ -530,6 +569,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		local success, result = enqueue_load(meta, record)
 		
 		if success and not result then
+			record.CurrentState = "Died"
 			meta._UnreadyData[record.Key] = nil
 			return false
 		elseif success and result then
@@ -538,6 +578,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return true
 		end
 		
+		record.CurrentState = "Died"
 		meta._UnreadyData[record.Key] = nil
 		return false
 	end
@@ -562,7 +603,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		-- Checking if essential elements of data are existing
-		if not unready.__vision or not unready.__bounds or not unready.__data then
+		if not unready.__vision or not unready.__bounds or not unready.__data or not unready.__flag then
 			meta._UnreadyData[record.Key] = nil
 			return false
 		end
@@ -609,8 +650,14 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		local compressedData = unready.__data
+		local flagData = unready.__flag -- 'C' means compressed, 'R' means raw/real
+		
 		local success, data = pcall(function()
-			return Compressor.Decompress(compressedData)
+			if flagData == "C"  then
+				return Compressor.Decompress(compressedData)
+			end
+			
+			return compressedData
 		end)
 		
 		-- Checking if the data is successfully decompressed
@@ -627,6 +674,9 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		record.CurrentState = "Ready" -- Current state is ready to do things
 		record.Version = meta._UnreadyData[record.Key].__vision or 0 -- Set the version of this record to real data version
 		meta._UnreadyData[record.Key] = nil -- Remove the unready data, because the data is ready
+		
+		meta._DataCache[record.Key] = unready -- Catch the record after filter
+		meta._DataCache[record.Key].__data = data  -- Cache the real data after compression
 		
 		return true
 	end
@@ -703,6 +753,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.DataBlueprint = {}
 	self.ErrorReasonNamespace = "UDataComponent"
 	self.CompressionLevel = 10
+	self.CompressionThreshold = 5 -- Threshold of 5 bytes from the overhead
 	self.LocalDataNamespace = "LUDataComponent"
 	self.MessagingEnabled = false
 	self.MessagingNamespace = "UDCBroadcast"
