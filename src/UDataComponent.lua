@@ -325,16 +325,12 @@ local function throw(record, message)
 end
 
 -- to reconcile data, where the data will be reconciled with the blueprint
-local function reconcile(meta : __UDCInfo_Internal, data : {any}, blueprint : {any})
+local function reconcile(data : {any}, blueprint : {any})
 	for key, value in pairs(blueprint) do
-		if data[key] == nil and typeof(value) == "table" then
-			-- if the value is a table, then we need to reconcile it too, with recursive function
-			reconcile(meta, data[key], value)
-		end
-		
 		if data[key] == nil then
-			-- if the data is nil and not a table type from blueprint, then we need to set it to the value
 			data[key] = value
+		elseif typeof(value) == "table" and typeof(data[key]) == "table" then
+			reconcile(data[key], value)
 		end
 	end
 end
@@ -542,7 +538,13 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	local clone = deepclone(meta.DataBlueprint)
 	local compressedBp, bpFlag = compare_and_compress(meta, clone)
 	
-	meta._CompressedBlueprint = compressedBp
+	-- Clone of data template/blueprint for the record
+	meta._CompressedBlueprint = {
+		__version = 0, -- Seed of the version for the record
+		__bounds = nil, -- Seed of bounding data for the record
+		__data = compressedBp, -- buffer of the data, regardless was compressed or not
+		__flag = bpFlag -- Flag of the data, to indicate if the data was compressed or not, 'C' for compressed, 'R' or else for not
+	}
 	
 	-- Clone of data template/blueprint	
 	local function get_blueprint()
@@ -562,7 +564,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- In Awake, also checks if this server owns the data, it will check if current owner was this player
 	-- SUSPENDING (YIELDABLE), where Awake waits for dequeue session until the data is loaded
 	function record:Awake()
-		if record.CurrentState ~= "Asleep" or record.CurrentState ~= "Sleeping" then
+		if record.CurrentState ~= "Asleep" and record.CurrentState ~= "Sleeping" then
 			return false
 		end
 		
@@ -603,7 +605,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		-- Checking if essential elements of data are existing
-		if not unready.__vision or not unready.__bounds or not unready.__data or not unready.__flag then
+		if not unready.__version or not unready.__bounds or not unready.__data or not unready.__flag then
 			meta._UnreadyData[record.Key] = nil
 			return false
 		end
@@ -635,13 +637,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		-- Checking if player is still in the server
 		local playerFound = false
-		while not playerFound do
-			if record.Owner and Players:GetPlayerByUserId(record.Owner.UserId) then
+		while record.Owner and not playerFound do
+			if Players:GetPlayerByUserId(record.Owner.UserId) then
 				playerFound = true
-			end
-			
 			-- If timeout is set, then it's not ready yet
-			if workspace:GetServerTimeNow() - now > FindingPlayerTimeout then
+			elseif workspace:GetServerTimeNow() - now > FindingPlayerTimeout then
 				meta._UnreadyData[record.Key] = nil
 				return false
 			end
@@ -672,7 +672,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		-- Apply the data to the cache
 		record.Data = data -- Data is now ready to be used
 		record.CurrentState = "Ready" -- Current state is ready to do things
-		record.Version = meta._UnreadyData[record.Key].__vision or 0 -- Set the version of this record to real data version
+		record.Version = meta._UnreadyData[record.Key].__version or 0 -- Set the version of this record to real data version
 		meta._UnreadyData[record.Key] = nil -- Remove the unready data, because the data is ready
 		
 		meta._DataCache[record.Key] = unready -- Catch the record after filter
