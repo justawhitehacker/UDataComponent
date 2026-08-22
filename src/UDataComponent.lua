@@ -336,31 +336,46 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		local _attempts = 0
 		local success, data
+		local thisOwnerID = record.Owner and record.Owner.UserId
 		
 		local now = workspace:GetServerTimeNow()
 		repeat
 			success, data = pcall(function()
 				return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+					-- Slight changes on bounds data will make a significant change on the data
+					-- ServerID will be released when final save of data happened
+					-- Released ServerID would be a nil, instead of an empty string
+					
+					-- So that, when serverid is nil, meaning the data hasn't been claimed, a quick server would claim this and assign their JobID into bounds
 					if CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
 						local bounds = CurrentData.__bounds
 						local id = CurrentData.__bounds.id
 						local serverId = bounds.serverid
 						local lastHeartbeat = CurrentData.__bounds.heartbeat or 0
 						
+						-- This is a check for a server that is still active, and avoiding two servers to claim this data
 						local isStale = now - lastHeartbeat > 90
 						
-						if record.Owner and record.Owner.UserId ~= id and serverId ~= ServerId and not isStale then
+						-- If-Result: When the player of this record is not same as the owner of this recond, AND
+						-- Bound ServerID is not same as this server's ServerID (ServerID means JobID), AND
+						-- Staled data, where a server is not live THEN
+						-- Returns NIL
+						if thisOwnerID ~= id and serverId ~= ServerId and not isStale then
 							return nil
 						end
 					end
 					
+					-- Passed Result: Quick-server will claim this data
+					-- Supossed that a data is not bound to any server, but this server
+					-- So, it would make another server who tries to get the data, will be blocked
 					CurrentData = CurrentData or get_blueprint()
 					CurrentData.__bounds = {
-						id = CurrentData.__bounds and CurrentData.__bounds.id,
-						serverid = ServerId,
-						since = CurrentData.__bounds and CurrentData.__bounds.since,
-						lastHeartbeat = now						
+						id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerID, -- This is UserID of the owner that claimed this data, static claimed OR when there is no claimer
+						serverid = ServerId, -- This is ServerID claiming
+						since = CurrentData.__bounds and CurrentData.__bounds.since or now, -- This is time since this data is claimed
+						lastHeartbeat = now -- Always update the time of heartbeat, to check if the server who claimed assumed still alive
 					}
+					
 					return CurrentData
 				end)
 			end)
@@ -373,10 +388,50 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 		until _attempts >= meta.DefaultDataLoadingAttempts or success or data ~= nil
 		
-		if data == nil then
+		if not success then
 			throw(record, "Failed to load the data, it seems there is no data to load. Trying to use backup...")
 			
 			local lastVersions = meta._CurrentDataStore:ListVersionsAsync(record.Key, Enum.SortDirection.Descending)
+			local lastVersion = lastVersions:GetCurrentPage()[1]
+			
+			if lastVersion then
+				local backupData, _ = meta._CurrentDataStore:GetVersionAsync(record.Key, lastVersion.Version)
+				
+				if backupData then
+					local success, result = pcall(function()
+						return meta._CurrentDataStore:UpdateAsync(record.Key, function(oldData)
+							if backupData.__bounds and backupData.__bounds.id and backupData.__bounds.serverid then
+								local bounds = backupData.__bounds
+								local id = backupData.__bounds.id
+								local serverid = backupData.__bounds.serverid
+								local lastHeartbeat = backupData.__bounds.lastHeartbeat or 0
+								
+								local isStale = now - lastHeartbeat > 90
+								
+								if id ~= thisOwnerID and serverid ~= ServerId and not isStale then
+									return nil
+								end
+							end
+							
+							backupData = backupData or get_blueprint()
+							backupData.__bounds = {
+								id = thisOwnerID,
+								serverid = ServerId,
+								since = now,
+								lastHeartbeat = now
+							}
+							return backupData
+						end)
+					end)
+					
+					if success then
+						
+					end
+				end
+			end
+		elseif data == nil then
+			
+		elseif data then
 			
 		end
 	end
@@ -470,6 +525,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._SwapTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SavePendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup } }
+	self._UnreadyData = {} -- { [Key: string] = true }
 	self._DataCache = {} -- { [Key: string] = Data: any }
 	self._BoundRegistry = {} -- { [Key: string] = table }
 	self._LockSessions = ScopedMutex.new(Mutex)
