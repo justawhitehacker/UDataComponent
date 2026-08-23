@@ -899,8 +899,19 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		-- Reconcilate the data with the blueprint, to prevent data corruption or data loss
 		reconcile(data, meta.DataBlueprint)
 		
-		if meta.ValidationEnabled then
-			for patchedKey, validationFunction
+		-- Checking if all datas are valid, even one invalid will case unready condition for strict checking
+		if not are_schemas_valid(meta, record, data) then
+			penalty()
+			return false
+		end
+		
+		-- Clamping all values with the validations, if the element was a number type
+		clamp_values(meta, record, data)
+		
+		-- Checking if datas are actually same as their own predicates
+		if not are_datas_valid(meta, record, data) then
+			penalty()
+			return false
 		end
 		
 		-- Apply the data to the cache
