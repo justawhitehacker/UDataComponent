@@ -114,6 +114,7 @@ export type UDCInfo = {
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
 	CompressionLevel : number, -- Compression level for the data
 	CompressionThreshold : number, -- Threshold for the data to be compressed, in bytes
+	CompressionQueueCooldown : number, -- Cooldown between each compression
 	MaxDecompressedSize : number, -- Maximum size for the data to be compressed, in bytes
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
@@ -161,7 +162,8 @@ export type __UDCInfo_Internal = {
 	_ObtainPendingQueue : { any? },
 	_UnreadyData : { any? },
 	_DataCache : { any? },
-	_BoundRegistry : { any? },
+	_CompressionStack : { any? },
+	_StandbyRegistry : { any? },
 	_LockSessions : any,
 	_LocalBroadcastListeners : { any? },
 
@@ -170,6 +172,7 @@ export type __UDCInfo_Internal = {
 	_ExclusiveSafetyCalled : boolean,
 	_IsSaveRunning : boolean,
 	_IsObtainingRunning : boolean,
+	_IsCompressionTimerRunning : boolean,
 	_CacheCleaningCalled : boolean,
 	
 	_CurrentLoadWorkers : number,
@@ -209,6 +212,7 @@ export type __UDCInfo_Internal = {
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
 	CompressionLevel : number, -- Compression level for the data, 1-22, default 10
 	CompressionThreshold : number, -- Threshold for the data to be compressed, in bytes
+	CompressionQueueCooldown : number, -- Cooldown for the compression queue
 	MaxDecompressedSize  : number, -- Maximum size for the data to be compressed, in bytes
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
@@ -315,10 +319,12 @@ local function deepclone(tab)
 	if typeof(tab) ~= "table" then
 		return tab
 	end		
-	local newTab = {}
+	local newTab = table.clone(tab)
 
 	for k, v in pairs(tab) do
-		newTab[k] = deepclone(v)
+		if typeof(v) == "table" then
+			newTab[k] = deepclone(v)
+		end
 	end
 
 	return newTab
@@ -506,58 +512,65 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	local thisOwnerId = record.Owner and record.Owner.UserId or 0
 	
 	local dataCache = meta._DataCache[record.Key]
-	if not dataCache then return end
+	if not dataCache then return false end
 	
-	local data = dataCache.__data
+	local tempData = dataCache.__data
 	
-	local ok, compressed, flag = pcall(function()
-		return compare_and_compress(meta, data)
-	end)
+	local ok, compressed, flag = pcall(compare_and_compress, meta, tempData)
+	if not ok then return false end
 	
 	dataCache.__version = (dataCache.__version or 0) + 1
 	dataCache.__flag = flag
-	dataCache.__data = compressed
 	
 	record._LastCompressedData = dataCache.__data
 	record._LastFlagData = dataCache.__flag
 	
-	local success, result = pcall(function()
-		return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
-			if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
-				local id = CurrentData.__bounds.id
-				local serverid = CurrentData.__bounds.serverid
-				local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
-				
-				local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
-				
-				local isDifferentOwner = thisOwnerId ~= id			
-				local isDifferentServer = serverid and serverid ~= ServerId and not isStale
-				
-				local isCacheStale = now - (dataCache.__bounds and dataCache.__bounds.since or 0) > meta.StaleServerClaimingTime
-				
-				local isServerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.serverid and dataCache.__bounds.serverid ~= serverid and not isCacheStale
-				local isOwnerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.id and dataCache.__bounds.id ~= id
-				
-				-- If the data from cache is owned by a different player or a different server, return nil to force an invalid result
-				if isServerNotSameAsCache or isOwnerNotSameAsCache then
-					return nil
+	local commitedData = deepclone(dataCache)
+	commitedData.__data = compressed
+	
+	local success, result
+	meta._LockSessions:Do(record.Key, function()
+		success, result = pcall(function()
+			return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+					local id = CurrentData.__bounds.id
+					local serverid = CurrentData.__bounds.serverid
+					local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
+
+					local isDifferentOwner = thisOwnerId ~= id			
+					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+
+					local isCacheStale = now - (dataCache.__bounds and dataCache.__bounds.since or 0) > meta.StaleServerClaimingTime
+
+					local isServerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.serverid and dataCache.__bounds.serverid ~= serverid and not isCacheStale
+					local isOwnerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.id and dataCache.__bounds.id ~= id
+
+					-- If the data from cache is owned by a different player or a different server, return nil to force an invalid result
+					if isServerNotSameAsCache or isOwnerNotSameAsCache then
+						return nil
+					end
+
+					-- If the data is owned by a different player or a different server, return nil to force an invalid result
+					if isDifferentOwner or isDifferentServer then
+						return nil
+					end
 				end
-				
-				-- If the data is owned by a different player or a different server, return nil to force an invalid result
-				if isDifferentOwner or isDifferentServer then
-					return nil
+
+				CurrentData = CurrentData or commitedData or meta._CompressedBlueprint
+
+				if commitedData.__version and commitedData.__version > (CurrentData and CurrentData.__version or 0) then
+					CurrentData = commitedData
 				end
-			end
-			
-			CurrentData = CurrentData or dataCache or meta._CompressedBlueprint
-			
-			if dataCache.__version and dataCache.__version > (CurrentData and CurrentData.__version or 0) then
-				CurrentData = dataCache
-			end
-			
-			return CurrentData
+
+				CurrentData.__bounds.lastheartbeat = now			
+				return CurrentData
+			end)
 		end)
 	end)
+	
+	return success and result
 end
 
 local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
@@ -659,8 +672,8 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 end
 
 local function run_save_queue(meta : __UDCInfo_Internal)
-	if meta._IsRunning or meta._ShutdownCalled then return end
-	meta._IsRunning = true
+	if meta._IsSaveRunning or meta._ShutdownCalled then return end
+	meta._IsSaveRunning = true
 	
 	RunService.Heartbeat:Connect(function(_)
 		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
@@ -693,6 +706,31 @@ local function run_save_queue(meta : __UDCInfo_Internal)
 	end)
 end
 
+local function run_compression_timer(meta : __UDCInfo_Internal)
+	if meta._IsCompressionTimerRunning or meta._ShutdownCalled then return end
+	meta._IsCompressionTimerRunning = true
+	
+	RunService.Heartbeat:Connect(function(_)
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
+		
+		local now = workspace:GetServerTimeNow()
+		for _, timer in ipairs(meta._CompressionStack) do
+			if timer.Record and timer.Record.Key and timer.Tick and meta._DataCache[timer.Record.Key] then
+				if timer.Dirty and now - timer.Tick > meta.CompressionQueueCooldown then
+					local success, compressed, flag = pcall(compare_and_compress, meta, meta._DataCache[timer.Record.Key].__data)
+					if success then
+						timer.Record._LastCompressedData = compressed
+						timer.Record._LastFlagData = flag
+						
+						timer.Dirty = false
+						timer.Tick = now
+					end
+				end
+			end
+		end
+	end)
+end
+
 local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
 	run_load_queue(meta) -- First-time run the load queue if it's not running
 	
@@ -715,6 +753,26 @@ local function enqueue_save(meta : __UDCInfo_Internal, record : UDCRecord)
 	})
 	
 	return coroutine.yield() -- Yield until the data is saved
+end
+
+local function push_compression_timer(meta : __UDCInfo_Internal, record : UDCRecord)
+	run_compression_timer(meta) -- First-time run the compression timer if it's not running
+	
+	local now = workspace:GetServerTimeNow()
+	for _, timer in ipairs(meta._CompressionStack) do
+		if timer.Record and timer.Record.Key == record.Key then
+			-- Assume that existed stack was actually want to be manipulated into dirty data
+			timer.Dirty = true
+			
+			return false -- Already pushed, no need to push again
+		end
+	end
+	
+	table.insert(meta._CompressionStack, {
+		Record = record,
+		Tick = now
+	})
+	return true
 end
 
 local function is_key_pending_load(meta : __UDCInfo_Internal, key : string)
@@ -856,6 +914,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	
 	record._ReadyProgress = false -- This is to indicate if the record's ready in progress
 	record._SleepProgress = false -- This is to indicate if the record's sleep in progress
+	record._SaveProgress = false -- This is to indicate if the record's save in progress, where Save and Write shares this variable
+	-- Because Write and Save are same, but have different roles in record commiting
 	
 	record._LastCompressedData = nil -- This is to store the last compressed data
 	record._LastFlagData = nil -- This is to store the last flag data, of compression
@@ -1052,6 +1112,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		record.Data = data -- Data is now ready to be used
 		record.CurrentState = "Ready" -- Current state is ready to do things
 		record.Version = meta._UnreadyData[record.Key].__version or 0 -- Set the version of this record to real data version
+		
 		meta._UnreadyData[record.Key] = nil -- Remove the unready data, because the data is ready
 		
 		meta._DataCache[record.Key] = unready -- Catch the record after filter
@@ -1140,11 +1201,115 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	end
 	
 	function record:Save(Data: any?, SegmentIndex: number?)
+		if not meta.Enabled or not UDataComponent.Enabled then
+			return false
+		end
 		
+		if record._SaveProgress then
+			return false
+		end
+		record._SaveProgress = true
+		
+		if record._SleepProgress then
+			record._SaveProgress = false
+			return false
+		end
+		
+		if record._ReadyProgress then
+			record._SaveProgress = false
+			return false
+		end
+		
+		if record.CurrentState ~= "Ready" then
+			record._SaveProgress = false
+			return false
+		end
+		
+		local data = meta._DataCache[record.Key]
+		if not data or not data.__data then
+			record._SaveProgress = false
+			return false
+		end
+		
+		if record.Data == nil then
+			record._SaveProgress = false
+			return false
+		end
+		
+		meta._LockSessions:Do(record.Key, function()
+			local commitedData = Data or record.Data
+			if SegmentIndex then
+				data.__data[SegmentIndex] = commitedData
+			else
+				data.__data = commitedData
+			end		
+			
+			record.Data = deepclone(data.__data)
+		end)
+		
+		local success = enqueue_save(meta, record)
+		
+		record._SaveProgress = false
+		if success then
+			return true
+		end
+		
+		return false
 	end
 	
 	function record:Write(WritingFunction: (CurrentData: any) -> ())
+		if not meta.Enabled or not UDataComponent.Enabled then
+			return false
+		end
 		
+		if record._SaveProgress then
+			return false
+		end
+		record._SaveProgress = true
+		
+		if record._SleepProgress then
+			record._SaveProgress = false
+			return false
+		end
+		
+		if record._ReadyProgress then
+			record._SaveProgress = false
+			return false
+		end
+		
+		if record.CurrentState ~= "Ready" then
+			record._SaveProgress = false
+			return false
+		end
+		
+		local data = meta._DataCache[record.Key]
+		if not data or not data.__data then
+			record._SaveProgress = false
+			return false
+		end
+		
+		local customData = deepclone(data.__data)
+		local success, func = pcall(WritingFunction, customData)
+		
+		if not success then
+			record._SaveProgress = false
+			return false
+		end
+		
+		meta._LockSessions:Do(record.Key, function()
+			data.__data = func
+			record.Data = func
+		end)
+		
+		push_compression_timer(meta, record)
+		local success = enqueue_save(meta, record)
+		
+		record._SaveProgress = false
+		if success then
+			return true
+		end
+		
+		return false
 	end
 	
 	function record:ForceSave(Data: any?, SegmentIndex: number?)
@@ -1204,6 +1369,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.ErrorReasonNamespace = "UDataComponent"
 	self.CompressionLevel = 10
 	self.CompressionThreshold = 5 -- Threshold of 5 bytes from the overhead
+	self.CompressionQueueCooldown = 30
 	self.MaxDecompressedSize = 4194304 -- 4 MB - 1 Byte
 	self.LocalDataNamespace = "LUDataComponent"
 	self.MessagingEnabled = false
@@ -1241,7 +1407,8 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._ObtainPendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup } }
 	self._UnreadyData = {} -- { [Key: string] = true }
 	self._DataCache = {} -- { [Key: string] = Data: any }
-	self._BoundRegistry = {} -- { [Key: string] = table }
+	self._CompressionStack = {} -- { {Record: UDCRecord, Tick: number} }
+	self._StandbyRegistry = {}
 	self._LockSessions = ScopedMutex.new(Mutex)
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
 
@@ -1250,6 +1417,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._ExclusiveSafetyCalled = false
 	self._IsSaveRunning = false
 	self._IsObtainingRunning = false
+	self._IsCompressionTimerRunning = false
 	self._CacheCleaningCalled = false
 	
 	self._CurrentLoadWorkers = 0
