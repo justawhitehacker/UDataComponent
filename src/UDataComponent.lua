@@ -516,14 +516,28 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	
 	local tempData = dataCache.__data
 	
-	local ok, compressed, flag = pcall(compare_and_compress, meta, tempData)
-	if not ok then return false end
+	local compressed, flag
+	for _, timer in ipairs(meta._CompressionStack) do
+		if timer.Record and timer.Record.Key and timer.Record.Key == record.Key and record._LastCompressedData and record._LastFlagData then
+			if not timer.Dirty then
+				compressed, flag = record._LastCompressedData, record._LastFlagData
+			else
+				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
+				
+				if not ok then
+					return false
+				end
+				
+				compressed, flag = newCompressed, newFlag
+				
+				record._LastCompressedData = compressed
+				record._LastFlagData = flag
+			end
+		end
+	end
 	
 	dataCache.__version = (dataCache.__version or 0) + 1
 	dataCache.__flag = flag
-	
-	record._LastCompressedData = dataCache.__data
-	record._LastFlagData = dataCache.__flag
 	
 	local commitedData = deepclone(dataCache)
 	commitedData.__data = compressed
