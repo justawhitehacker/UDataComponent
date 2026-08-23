@@ -517,6 +517,10 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	dataCache.__version = (dataCache.__version or 0) + 1
 	dataCache.__flag = flag
 	dataCache.__data = compressed
+	
+	record._LastCompressedData = dataCache.__data
+	record._LastFlagData = dataCache.__flag
+	
 	local success, result = pcall(function()
 		return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
 			if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
