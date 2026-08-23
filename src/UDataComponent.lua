@@ -112,6 +112,7 @@ export type UDCInfo = {
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
 	CompressionLevel : number, -- Compression level for the data
 	CompressionThreshold : number, -- Threshold for the data to be compressed, in bytes
+	MaxDecompressedSize : number, -- Maximum size for the data to be compressed, in bytes
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
 	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
@@ -206,6 +207,7 @@ export type __UDCInfo_Internal = {
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
 	CompressionLevel : number, -- Compression level for the data, 1-22, default 10
 	CompressionThreshold : number, -- Threshold for the data to be compressed, in bytes
+	MaxDecompressedSize  : number, -- Maximum size for the data to be compressed, in bytes
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
 	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
@@ -243,7 +245,7 @@ export type UDCRecord = {
 	Awake: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) IMPORTANT POINT, this load the record from the datastore, and must be called when player is joing the experience
 	-- @return boolean -- Status of the loading the data, true if success
 	
-	Ready: (UDCRecord: UDCRecord, TimeoutFindPlayer: number?) -> boolean, -- (Suspending) IMPORANT POINT, this must be called before the data can be used, where UDC is evaluating everything fromn the data and ownership, before the data can be used
+	Ready: (UDCRecord: UDCRecord, FindingPlayerTimeout: number?) -> boolean, -- (Suspending) IMPORANT POINT, this must be called before the data can be used, where UDC is evaluating everything fromn the data and ownership, before the data can be used
 	-- @return boolean -- Status when the data of this player is ready after evaluating and hard-checking, if true the data is ready to be used
 	
 	Standby: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) IMPORTANT POINT, this will be called automatically when player is leaving the experience, or server shutdown, where the data will be saved and released, must be called after the record is ready, which after "Ready()" returns true. 
@@ -333,6 +335,46 @@ local function reconcile(data : {any}, blueprint : {any})
 			reconcile(data[key], value)
 		end
 	end
+end
+
+-- finding a heart (value of a key) within a girl (table)
+local function find_element(girl : {any}, heart : any, tries : number?)
+	tries = tries or 1 -- tries is an index where the element can be found inside and obtained
+	-- As example:
+	--[[
+	You have a table like this:
+	{
+		Inventory = 
+		{
+			Inventory = 30,
+			...
+		}
+	}
+	
+	If you use default tries index or 1. You will return the "Inventory" element that has the table as value.
+	Regarding to the example above, if you want to get the "Inventory" element that has number value, you need to set the tries to 2.
+	
+	If there is no element that matches the needle, it will return nil
+	--]]
+	
+	local count = 0
+	for key, value in pairs(girl) do
+		if key == heart then
+			count += 1
+			
+			if count == tries then
+				return value
+			end
+		elseif typeof(value) == "table" then
+			local element = find_element(value, heart, tries - count)
+			
+			if element then
+				return element
+			end
+		end
+	end
+	
+	return nil	
 end
 
 -- to load the data, where it's running in a session
@@ -513,6 +555,40 @@ local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
 	return coroutine.yield() -- Yield until the data is loaded, and returns the status and loaded data
 end
 
+local function are_schemas_valid(meta : __UDCInfo_Internal, record : UDCRecord, data : {any})
+	if not meta.ValidationEnabled then
+		return true
+	end
+	
+	local key = record.Key
+	local trackedSchemas = meta._TrackedSchemas[key]
+	
+	if not trackedSchemas then
+		return true
+	end
+	
+	for key, info in pairs(trackedSchemas) do
+		local schema = info.schema
+		local penetration = info.penetration
+		
+		if not schema or not penetration then
+			continue
+		end
+		
+		local element = find_element(data, key, penetration)
+		
+		if not element then
+			continue
+		end
+		
+		if typeof(element) ~= schema then
+			return false
+		end
+	end
+	
+	return true
+end
+
 local function compare_and_compress(meta : __UDCInfo_Internal, data : { any? })
 	local buff, flag = Compressor.TryToCompress(data, meta.CompressionLevel, meta.CompressionThreshold)
 	
@@ -532,19 +608,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.Data = nil -- This is the data of the record
 	record.CurrentState = "Asleep"
 	
+	record._ReadyProgress = false -- This is to indicate if the record's ready in progress
+	
 	-- State machines: Asleep -> WakingUp -> Ready -> Sleeping || Asleep
 	-- Difference of Asleep and Sleeping, Asleep is when the data is loaded first time, meanwhile Sleeping is when the data is released and saved, but can be called by Awake again
-	
-	local clone = deepclone(meta.DataBlueprint)
-	local compressedBp, bpFlag = compare_and_compress(meta, clone)
-	
-	-- Clone of data template/blueprint for the record
-	meta._CompressedBlueprint = {
-		__version = 0, -- Seed of the version for the record
-		__bounds = nil, -- Seed of bounding data for the record
-		__data = compressedBp, -- buffer of the data, regardless was compressed or not
-		__flag = bpFlag -- Flag of the data, to indicate if the data was compressed or not, 'C' for compressed, 'R' or else for not
-	}
 	
 	-- Clone of data template/blueprint	
 	local function get_blueprint()
@@ -571,7 +638,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		local success, result = enqueue_load(meta, record)
 		
 		if success and not result then
-			record.CurrentState = "Died"
+			record.CurrentState = "Sleeping"
 			meta._UnreadyData[record.Key] = nil
 			return false
 		elseif success and result then
@@ -580,7 +647,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return true
 		end
 		
-		record.CurrentState = "Died"
+		record.CurrentState = "Sleeping"
 		meta._UnreadyData[record.Key] = nil
 		return false
 	end
@@ -589,10 +656,38 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- I made the data compressed into buffer to reduce the size of data
 	-- Here we are, Ready() called to make a hard-checking and evaluating every security and data details
 	-- Then the data will be decompressed and record.Data can be accessed to get the read data
-	-- SUSPENDING (YIELDABLE), where Ready waits for checking every details until its done checking and applied to cache
+	-- SUSPENDING (YIELDABLE), where Ready yields for checking every details until its done checking and applied to cache
 	function record:Ready(FindingPlayerTimeout: number?)
+		FindingPlayerTimeout = FindingPlayerTimeout or 10
+		
+		local function penalty()
+			record._ReadyProgress = false
+			
+			record.CurrentState = "Sleeping"
+			meta._UnreadyData[record.Key] = nil
+		end
+		
+		if not UDataComponent.IsAlive() then
+			return false
+		end
+		
+		if not meta.Enabled or not UDataComponent.Enabled then
+			return false
+		end
+		
 		-- Whether the data is already waking up or not, if not, maybe cannot ready or already running
 		if record.CurrentState ~= "WakingUp" then
+			return false
+		end
+		
+		if record._ReadyProgress then
+			return false
+		end
+		
+		record._ReadyProgress = true
+		
+		if meta._DataCache[record.Key] ~= nil then
+			record.CurrentState = "Sleeping"
 			return false
 		end
 		
@@ -601,73 +696,94 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		-- Checking if the raw/unready data already loaded
 		if not unready then
+			record._ReadyProgress = false
+			record.CurrentState = "Sleeping"
+			return false
+		end
+		
+		-- Checking if the was archived or not
+		if record.IsArchived then
+			penalty()
 			return false
 		end
 		
 		-- Checking if essential elements of data are existing
 		if not unready.__version or not unready.__bounds or not unready.__data or not unready.__flag then
-			meta._UnreadyData[record.Key] = nil
+			penalty()
 			return false
 		end
 		
 		-- Checking if bound elements in the data are existed
 		if not unready.__bounds or not unready.__bounds.id or not unready.__bounds.since or not unready.__bounds.serverid then
-			meta._UnreadyData[record.Key] = nil
+			penalty()
 			return false
 		end
 		
 		-- Checking if the data is owned by this server
 		if unready.__bounds.serverid ~= ServerId then
-			meta._UnreadyData[record.Key] = nil
+			penalty()
 			return false
 		end
 		
 		-- Checking if the data is owned by this player
 		if record.Owner and record.Owner.UserId ~= unready.__bounds.id then
-			meta._UnreadyData[record.Key] = nil
+			penalty()
 			return false
 		end
 		
 		-- Checking if the data is still bound to this player
 		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
 		if now - unready.__bounds.since > timeout then
-			meta._UnreadyData[record.Key] = nil
+			penalty()
 			return false
 		end
 		
 		-- Checking if player is still in the server
 		local playerFound = false
 		while record.Owner and not playerFound do
+			-- If the player is still in the server, then it's ready
 			if Players:GetPlayerByUserId(record.Owner.UserId) then
 				playerFound = true
 			-- If timeout is set, then it's not ready yet
 			elseif workspace:GetServerTimeNow() - now > FindingPlayerTimeout then
-				meta._UnreadyData[record.Key] = nil
+				penalty()
 				return false
+			else
+				task.wait(1)
 			end
-			
-			task.wait(1)
 		end
 		
 		local compressedData = unready.__data
 		local flagData = unready.__flag -- 'C' means compressed, 'R' means raw/real
 		
 		local success, data = pcall(function()
-			if flagData == "C"  then
-				return Compressor.Decompress(compressedData)
-			end
-			
-			return compressedData
+			return Compressor.TryToDecompress(compressedData, flagData)
 		end)
 		
 		-- Checking if the data is successfully decompressed
 		if not success then
-			meta._UnreadyData[record.Key] = nil
+			penalty()
+			return false
+		end
+		
+		-- Checking if the data is a table
+		if typeof(data) ~= "table" then
+			penalty()
+			return false
+		end
+		
+		-- Checking if the data size is not too big
+		if Compressor.GetSize(data) > meta.MaxDecompressedSize then
+			penalty()
 			return false
 		end
 		
 		-- Reconcilate the data with the blueprint, to prevent data corruption or data loss
-		reconcile(record, data, meta.DataBlueprint)
+		reconcile(data, meta.DataBlueprint)
+		
+		if meta.ValidationEnabled then
+			for patchedKey, validationFunction
+		end
 		
 		-- Apply the data to the cache
 		record.Data = data -- Data is now ready to be used
@@ -677,6 +793,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		meta._DataCache[record.Key] = unready -- Catch the record after filter
 		meta._DataCache[record.Key].__data = data  -- Cache the real data after compression
+		
+		record._ReadyProgress = false
 		
 		return true
 	end
@@ -754,6 +872,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.ErrorReasonNamespace = "UDataComponent"
 	self.CompressionLevel = 10
 	self.CompressionThreshold = 5 -- Threshold of 5 bytes from the overhead
+	self.MaxDecompressedSize = 4194304 -- 4 MB - 1 Byte
 	self.LocalDataNamespace = "LUDataComponent"
 	self.MessagingEnabled = false
 	self.MessagingNamespace = "UDCBroadcast"
@@ -767,12 +886,21 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.MaxConcurrentSaveWorkers = 5
 	self.MaxConcurrentLoadWorkers = 5
 	self.StaleServerClaimingTime = 90
+	
+	local clone = deepclone(self.DataBlueprint)
+	local compressedBp, flagBp = compare_and_compress(self, clone)
+	
+	-- Clone of data template/blueprint for the record
+	self._CompressedBlueprint = {
+		__version = 0, -- Seed of the version for the record
+		__bounds = nil, -- Seed of bounding data for the record
+		__data = compressedBp, -- buffer of the data, regardless was compressed or not
+		__flag = flagBp -- Flag of the data, to indicate if the data was compressed or not, 'C' for compressed, 'R' or else for not
+	}
 
 	self._CurrentDataStore = DataStoreService:GetDataStore(DataStoreName, Scope)
 	self._CurrentWALDataStore = DataStoreService:GetDataStore(DataStoreName..self.WALDataSuffix, Scope)
-	self._CurrentArchivedDataStore = DataStoreService:GetDataStore(DataStoreName..self.ArchivationSuffix, Scope)
-	
-	self._CompressedBlueprint = nil
+	self._CurrentArchivedDataStore = DataStoreService:GetDataStore(DataStoreName..self.ArchivationSuffix, Scope)	
 
 	self._SaveTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SwapTimestamp = {} -- { [Key: string] = timestamp: number }
