@@ -1,3 +1,37 @@
+--[[
+CURRENT BATTLE TEST RESULTS (First Version):
+
+A. Core Testing
+1. Data is loaded correctly
+2. Data is ready properly
+3. Data record can be accessed everywhere after ready
+4. Data can be changed from .Data, but you need to use Save() to save it
+5. Write() executes properly, and returns failed when the data is already released or asleep
+6. Save() with custom data successfully saved the data
+7. Save() with custom data AND segment index successfully saved the data
+8. When trying to access .Data before Ready() even called, it will return nil
+9. When trying to call record for sleep twice, first operation will return true, and second operation will return false
+10. When trying to call record then ready, then sleep, then awake again and ready, it's successfully awakening the .Data
+11. When trying to use record members, or modify the data before Ready called. It will return nil or failed, without crashing
+12. When trying to use record members, or modify the data after sleep. It will return nil or failed, without crashing
+
+Result of Core Testing: SUCCESS
+
+B. Reconciliation Testing
+1. When there is a missing element, it will be reconciled
+2. When trying to use Save() just only to save some datas without including other elements as blueprint, it will automatically reconciled missing elements
+3. When there is/are new element(s) from blueprint, meanwhile loaded old data from a record haven't included those element(s) because recently added, it will automatically reconciled
+4. Same as number 3, but nested data will also reconciled
+5. When there is/are removed elements from blueprint, meanwhile you've been loaded it already, it remains without missing
+6. Reconcile works gracefully, no elements overlapping when the data already loaded or existed
+
+Result of Reconciliation Testing: SUCCESS
+
+C. Exclusive Access (Single Server)
+COMING SOON... TOMORROW
+
+--]]
+
 -- UDataComponent.lua
 -- UDataComponent-v2.0
 
