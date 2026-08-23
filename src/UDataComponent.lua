@@ -686,6 +686,38 @@ local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
 	return coroutine.yield() -- Yield until the data is loaded, and returns the status and loaded data
 end
 
+local function enqueue_save(meta : __UDCInfo_Internal, record : UDCRecord)
+	run_save_queue(meta) -- First-time run the save queue if it's not running
+	
+	local currentThread = coroutine.running()
+	table.insert(meta._SavePendingQueue, {
+		Meta = record,
+		Thread = currentThread,
+	})
+	
+	return coroutine.yield() -- Yield until the data is saved
+end
+
+local function is_key_pending_load(meta : __UDCInfo_Internal, key : string)
+	for _, pending in ipairs(meta._ObtainPendingQueue) do
+		if pending.Meta and pending.Meta.Key == key then
+			return true
+		end
+	end
+	
+	return false
+end
+
+local function is_key_pending_save(meta : __UDCInfo_Internal, key : string)
+	for _, pending in ipairs(meta._SavePendingQueue) do
+		if pending.Meta and pending.Meta.Key == key then
+			return true
+		end
+	end
+	
+	return false
+end
+
 -- validator for data type checking
 local function are_schemas_valid(meta : __UDCInfo_Internal, record : UDCRecord, data : {any})
 	if not meta.ValidationEnabled then
@@ -1023,11 +1055,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	end
 	
 	function record:Sleep()
-		if not UDataComponent.IsAlive() then
+		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
 		end
 		
-		if not meta.Enabled or not UDataComponent.Enabled then
+		if record._ReadyProgress then
 			return false
 		end
 		
@@ -1054,11 +1086,13 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		record.CurrentState = "Asleep"
-		record._SleepProgress = false
+		-- Checking if the data is still pending to save
+		while is_key_pending_save(meta, record.Key) do
+			task.wait()
+		end
 		
 		local thisOwnerId = record.Owner and record.Owner.UserId or 0		
-		local success = pcall(function()
+		local success, result = pcall(function()
 			return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
 				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.serverid and CurrentData.__bounds.lastheartbeat and CurrentData.__bounds.id then
 					local isSameServer = CurrentData.__bounds.serverid == ServerId
@@ -1077,7 +1111,20 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end)
 		end)
 		
-		return success
+		if success and result then
+			record.Owner = nil
+			record.Data = nil
+			record.Version = 0
+				
+			record.CurrentState = "Asleep"
+			record._SleepProgress = false
+			
+			meta._DataCache[record.Key] = nil
+			
+			return true
+		end
+		
+		return false
 	end
 	
 	function record:Save(Data: any?, SegmentIndex: number?)
