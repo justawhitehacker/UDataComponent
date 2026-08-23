@@ -1127,6 +1127,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 	end
 	
+	-- Releasing the data from session, where this means this record has been fell asleep and cannot use the data anymore, unless you call Awake() to wake it up again
 	function record:Sleep()
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
@@ -1200,6 +1201,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		return false
 	end
 	
+	-- Reluctantly saving current data from the modification of .Data from record, but you can use another data to save
+	-- Use SegmentIndex if you ever want to make cheaper data to save
 	function record:Save(Data: any?, SegmentIndex: number?)
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
@@ -1257,6 +1260,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		return false
 	end
 	
+	-- Easy, safe way to modificate the data of this record
+	-- Where Write() allows you to modificate the data safely with validation checking and compression operations
 	function record:Write(WritingFunction: (CurrentData: any) -> ())
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
@@ -1292,6 +1297,18 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		local success, func = pcall(WritingFunction, customData)
 		
 		if not success then
+			record._SaveProgress = false
+			return false
+		end
+		
+		if not are_schemas_valid(meta, record, func) then
+			record._SaveProgress = false
+			return false
+		end
+		
+		clamp_values(meta, record, func)
+		
+		if not are_datas_valid(meta, record, func) then
 			record._SaveProgress = false
 			return false
 		end
