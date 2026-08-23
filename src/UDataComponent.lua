@@ -727,6 +727,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.CurrentState = "Asleep"
 	
 	record._ReadyProgress = false -- This is to indicate if the record's ready in progress
+	record._SleepProgress = false -- This is to indicate if the record's sleep in progress
 	
 	-- State machines: Asleep -> WakingUp -> Ready -> Sleeping || Asleep
 	-- Difference of Asleep and Sleeping, Asleep is when the data is loaded first time, meanwhile Sleeping is when the data is released and saved, but can be called by Awake again
@@ -933,7 +934,45 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	end
 	
 	function record:Sleep()
+		if not UDataComponent.IsAlive() then
+			return false
+		end
 		
+		if not meta.Enabled or not UDataComponent.Enabled then
+			return false
+		end
+		
+		if record._SleepProgress then
+			return false
+		end
+		
+		record._SleepProgress = true
+		
+		if record.CurrentState ~= "Ready" then
+			record._SleepProgress = false
+			return false
+		end
+		
+		if record.Data == nil then
+			record._SleepProgress = false
+			return false
+		end
+		
+		local now = workspace:GetServerTimeNow()
+		local dataCache = meta._DataCache[record.Key]
+		if not dataCache or not dataCache.__bounds then
+			record._SleepProgress = false
+			return false
+		end
+		
+		dataCache.__bounds.serverid = nil
+		dataCache.__bounds.lastheartbeat = nil
+		dataCache.__bounds.since = now -- update the bounds
+		
+		record.CurrentState = "Asleep"
+		record._SleepProgress = false
+		
+		return true
 	end
 	
 	function record:Save(Data: any?, SegmentIndex: number?)
