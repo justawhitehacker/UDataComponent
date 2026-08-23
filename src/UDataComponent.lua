@@ -303,6 +303,13 @@ export type UDCEventConnector = {
 	
 }
 
+-- automatic compression, by checking if there is an overhead if compressed or not
+local function compare_and_compress(meta : __UDCInfo_Internal, data : { any? })
+	local buff, flag = Compressor.TryToCompress(data, meta.CompressionLevel, meta.CompressionThreshold)
+
+	return buff, flag
+end
+
 -- for deepcloning table
 local function deepclone(tab)
 	if typeof(tab) ~= "table" then
@@ -501,8 +508,16 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	local dataCache = meta._DataCache[record.Key]
 	if not dataCache then return end
 	
+	local data = dataCache.__data
+	
+	local ok, compressed, flag = pcall(function()
+		return compare_and_compress(meta, data)
+	end)
+	
 	dataCache.__version = (dataCache.__version or 0) + 1
-	local success, err = pcall(function()
+	dataCache.__flag = flag
+	dataCache.__data = compressed
+	local success, result = pcall(function()
 		return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
 			if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
 				local id = CurrentData.__bounds.id
@@ -820,13 +835,6 @@ local function are_datas_valid(meta : __UDCInfo_Internal, record : UDCRecord, da
 	end
 	
 	return true -- are valid if all data's validations matched
-end
-
--- automatic compression, by checking if there is an overhead if compressed or not
-local function compare_and_compress(meta : __UDCInfo_Internal, data : { any? })
-	local buff, flag = Compressor.TryToCompress(data, meta.CompressionLevel, meta.CompressionThreshold)
-	
-	return buff, flag
 end
 
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
