@@ -517,23 +517,36 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	local tempData = dataCache.__data
 	
 	local compressed, flag
-	for _, timer in ipairs(meta._CompressionStack) do
-		if timer.Record and timer.Record.Key and timer.Record.Key == record.Key and record._LastCompressedData and record._LastFlagData then
-			if not timer.Dirty then
-				compressed, flag = record._LastCompressedData, record._LastFlagData
-			else
-				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
-				
-				if not ok then
-					return false
-				end
-				
-				compressed, flag = newCompressed, newFlag
-				
-				record._LastCompressedData = compressed
-				record._LastFlagData = flag
+	local found = false
+	
+	local existed = meta._CompressionStack[record.Key]
+	
+	if existed then
+		if not existed.Dirty and record._LastCompressedData and record._LastFlagData then
+			compressed, flag = record._LastCompressedData, record._LastFlagData
+		else
+			local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
+
+			if not ok then
+				return false
 			end
+
+			compressed, flag = newCompressed, newFlag
+
+			record._LastCompressedData = compressed
+			record._LastFlagData = flag
+
+			timer.Tick = now
+			timer.Dirty = false
 		end
+	else
+		local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
+		if not ok then return false end
+
+		compressed, flag = newCompressed, newFlag
+
+		record._LastCompressedData = compressed
+		record._LastFlagData = flag
 	end
 	
 	dataCache.__version = (dataCache.__version or 0) + 1
@@ -728,10 +741,10 @@ local function run_compression_timer(meta : __UDCInfo_Internal)
 		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
 		
 		local now = workspace:GetServerTimeNow()
-		for _, timer in ipairs(meta._CompressionStack) do
-			if timer.Record and timer.Record.Key and timer.Tick and meta._DataCache[timer.Record.Key] then
+		for key, timer in pairs(meta._CompressionStack) do
+			if timer.Record and timer.Tick and meta._DataCache[key] then
 				if timer.Dirty and now - timer.Tick > meta.CompressionQueueCooldown then
-					local success, compressed, flag = pcall(compare_and_compress, meta, meta._DataCache[timer.Record.Key].__data)
+					local success, compressed, flag = pcall(compare_and_compress, meta, meta._DataCache[key].__data)
 					if success then
 						timer.Record._LastCompressedData = compressed
 						timer.Record._LastFlagData = flag
@@ -773,19 +786,19 @@ local function push_compression_timer(meta : __UDCInfo_Internal, record : UDCRec
 	run_compression_timer(meta) -- First-time run the compression timer if it's not running
 	
 	local now = workspace:GetServerTimeNow()
-	for _, timer in ipairs(meta._CompressionStack) do
-		if timer.Record and timer.Record.Key == record.Key then
-			-- Assume that existed stack was actually want to be manipulated into dirty data
-			timer.Dirty = true
-			
-			return false -- Already pushed, no need to push again
-		end
+
+	local existed = meta._CompressionStack[record.Key]
+	if existed then
+		existed.Dirty = true
+		return false
 	end
 	
-	table.insert(meta._CompressionStack, {
+	meta._CompressionStack[record.Key] = {
 		Record = record,
-		Tick = now
-	})
+		Tick = now,
+		Dirty = true
+	}
+	
 	return true
 end
 
@@ -1263,6 +1276,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			
 			record.Data = deepclone(data.__data)
 		end)
+		push_compression_timer(meta, record)
 		
 		local success = enqueue_save(meta, record)
 		
@@ -1308,28 +1322,28 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		local customData = deepclone(data.__data)
-		local success, func = pcall(WritingFunction, customData)
+		local success = pcall(WritingFunction, customData)
 		
 		if not success then
 			record._SaveProgress = false
 			return false
 		end
 		
-		if not are_schemas_valid(meta, record, func) then
+		if not are_schemas_valid(meta, record, customData) then
 			record._SaveProgress = false
 			return false
 		end
 		
-		clamp_values(meta, record, func)
+		clamp_values(meta, record, customData)
 		
-		if not are_datas_valid(meta, record, func) then
+		if not are_datas_valid(meta, record, customData) then
 			record._SaveProgress = false
 			return false
 		end
 		
 		meta._LockSessions:Do(record.Key, function()
-			data.__data = func
-			record.Data = func
+			data.__data = customData
+			record.Data = deepclone(customData)
 		end)
 		
 		push_compression_timer(meta, record)
@@ -1438,7 +1452,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._ObtainPendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup } }
 	self._UnreadyData = {} -- { [Key: string] = true }
 	self._DataCache = {} -- { [Key: string] = Data: any }
-	self._CompressionStack = {} -- { {Record: UDCRecord, Tick: number} }
+	self._CompressionStack = {} -- { [Key: string] = {Record: UDCRecord, Tick: number} }
 	self._StandbyRegistry = {}
 	self._LockSessions = ScopedMutex.new(Mutex)
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
