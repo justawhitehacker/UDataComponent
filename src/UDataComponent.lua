@@ -363,18 +363,65 @@ local function find_element(girl : {any}, heart : any, tries : number?)
 			count += 1
 			
 			if count == tries then
-				return value
+				return value, count
 			end
-		elseif typeof(value) == "table" then
-			local element = find_element(value, heart, tries - count)
+		end
+		
+		if typeof(value) == "table" then
+			local element, subcount = find_element(value, heart, tries - count)
+			count += subcount
 			
 			if element then
-				return element
+				return element, count
 			end
 		end
 	end
 	
-	return nil	
+	return nil, count
+end
+
+-- changing a heart (value of a key) with an intention (intended value) within a girl (table)
+local function change_element(girl : {any}, heart : any, intention : any, tries : number?)
+	tries = tries or 1 -- tries is an index where the element can be found inside and obtained
+	-- As example:
+	--[[
+	You have a table like this:
+	{
+		Inventory = {
+			Inventory = 30,
+			...
+		}
+	}
+	
+	If you use default tries index or 1. You will change the "Inventory" element that has the table as value, into your intended value.
+	Regarding to the example above, if you want to change the "Inventory" element that has number value, you need to set the tries to 2.
+	
+	It will return true if it's successfully changed, otherwise it will return false.
+	If you ever tries to out of the tries, it will return false of change nothing.
+	--]]
+	
+	local count = 0
+	for key, value in pairs(girl) do
+		if key == heart then
+			count += 1
+			
+			if count == tries then
+				girl[key] = intention
+				return true, count
+			end
+		end
+		
+		if typeof(value) == "table" then
+			local success, subcount = change_element(value, heart, intention, tries - count)
+			count += subcount
+			
+			if success then
+				return true, count
+			end
+		end
+	end
+	
+	return false, count
 end
 
 -- to load the data, where it's running in a session
@@ -555,40 +602,111 @@ local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
 	return coroutine.yield() -- Yield until the data is loaded, and returns the status and loaded data
 end
 
+-- validator for data type checking
 local function are_schemas_valid(meta : __UDCInfo_Internal, record : UDCRecord, data : {any})
 	if not meta.ValidationEnabled then
-		return true
+		return true -- if validation service is dead, just allow
 	end
 	
 	local key = record.Key
 	local trackedSchemas = meta._TrackedSchemas[key]
 	
 	if not trackedSchemas then
-		return true
+		return true -- When the record isn't asked to be validated
 	end
 	
 	for key, info in pairs(trackedSchemas) do
-		local schema = info.schema
-		local penetration = info.penetration
+		local schema = info.Schema
+		local penetration = info.Penetration
 		
 		if not schema or not penetration then
-			continue
+			continue -- just pass, if there are not informations about these from validators
 		end
 		
-		local element = find_element(data, key, penetration)
+		local element = find_element(data, key, penetration) -- finding elements through nested ways
 		
 		if not element then
-			continue
+			continue -- if there is no key in the data, it's probably just a "safety-net"
 		end
 		
 		if typeof(element) ~= schema then
-			return false
+			return false -- are invalid when there is even one data hasn't same type as validators
 		end
 	end
 	
-	return true
+	return true -- are valid if all data's schemas suited
 end
 
+-- validator for data value clamping, automatic operations, void
+local function clamp_values(meta : __UDCInfo_Internal, record : UDCRecord, data : {any})
+	if not meta.ValidationEnabled then
+		return -- no clamping when validation service is dead
+	end
+	
+	local key = record.Key
+	local trackedClamps = meta._TrackedClamps[key]
+	
+	if not trackedClamps then
+		return -- When the record isn't asked to be clamped
+	end
+	
+	for key, info in pairs(trackedClamps) do
+		local min, max = info.Min, info.Max
+		local penetration = info.Penetration
+		
+		if not min or not max or not penetration then
+			continue -- just pass, if there is no these elements in validator
+		end
+		
+		local element = find_element(data, key, penetration)
+		if not element or typeof(element) ~= "number" then
+			continue -- if there is no element that want to be clamped OR it's not a number
+		end
+		
+		local clamp = math.clamp(element, min, max)
+		local success = change_element(data, key, clamp, penetration)
+		
+		if not success then
+			continue -- if there is no element that want to be clamped
+		end
+	end
+end
+
+-- validator for data value checking
+local function are_datas_valid(meta : __UDCInfo_Internal, record : UDCRecord, data : {any})
+	if not meta.ValidationEnabled then
+		return true -- if validation service is dead, just allow
+	end
+
+	local key = record.Key
+	local trackedValidations = meta._TrackedValidations[key]
+
+	if not trackedValidations then
+		return true -- When the record isn't asked to be validated
+	end
+
+	for key, info in pairs(trackedValidations) do
+		local predicate = info.Predicate
+		local penetration = info.Penetration
+		
+		if not predicate or not penetration then
+			continue -- just pass, if there's no these elements in validator
+		end
+		
+		local element = find_element(data, key, penetration)
+		if not element then
+			continue -- if there is no element that want to be validated
+		end
+		
+		if not predicate(element) then
+			return false -- if there is one data that is not valid or same as predicate, return false
+		end
+	end
+	
+	return true -- are valid if all data's validations matched
+end
+
+-- automatic compression, by checking if there is an overhead if compressed or not
 local function compare_and_compress(meta : __UDCInfo_Internal, data : { any? })
 	local buff, flag = Compressor.TryToCompress(data, meta.CompressionLevel, meta.CompressionThreshold)
 	
