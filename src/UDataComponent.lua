@@ -536,8 +536,8 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 			record._LastCompressedData = compressed
 			record._LastFlagData = flag
 
-			timer.Tick = now
-			timer.Dirty = false
+			existed.Tick = now
+			existed.Dirty = false
 		end
 	else
 		local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
@@ -573,6 +573,8 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 
 					local isServerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.serverid and dataCache.__bounds.serverid ~= serverid and not isCacheStale
 					local isOwnerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.id and dataCache.__bounds.id ~= id
+					
+					print("ok")
 
 					-- If the data from cache is owned by a different player or a different server, return nil to force an invalid result
 					if isServerNotSameAsCache or isOwnerNotSameAsCache then
@@ -584,7 +586,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 						return nil
 					end
 				end
-
+								
 				CurrentData = CurrentData or commitedData or meta._CompressedBlueprint
 
 				if commitedData.__version and commitedData.__version > (CurrentData and CurrentData.__version or 0) then
@@ -724,7 +726,9 @@ local function run_save_queue(meta : __UDCInfo_Internal)
 			
 			meta._CurrentSaveWorkers += 1 -- Workers in working
 			task.spawn(function()
-				local success = pcall(save_data, meta, first.Meta)
+				local success, err = pcall(save_data, meta, first.Meta)
+				
+				print(success, err)
 				
 				meta._CurrentSaveWorkers -= 1 -- Workers finised the work
 				task.spawn(first.Thread, success) -- Continue the thread, regardless of the result
@@ -927,6 +931,10 @@ local function are_datas_valid(meta : __UDCInfo_Internal, record : UDCRecord, da
 end
 
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
+	if meta._ActiveRecords[key] then
+		return meta._ActiveRecords[key]
+	end
+	
 	local record = {}
 	record.Key = key -- This is the key of the record
 	record.Owner = owner -- This is the owner of the record
@@ -1009,20 +1017,20 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		if not UDataComponent.IsAlive() then
 			return false
 		end
-		
+				
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
 		end
-		
+				
 		-- Whether the data is already waking up or not, if not, maybe cannot ready or already running
 		if record.CurrentState ~= "WakingUp" then
 			return false
 		end
-		
+				
 		if record._ReadyProgress then
 			return false
 		end
-		
+				
 		record._ReadyProgress = true
 		
 		if meta._DataCache[record.Key] ~= nil then
@@ -1038,52 +1046,57 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record._ReadyProgress = false
 			record.CurrentState = "Sleeping"
 			return false
+		end		
+
+		if meta._ActiveRecords[record.Key] then
+			penalty()
+			return false
 		end
-		
+				
 		-- Checking if the was archived or not
 		if record.IsArchived then
 			penalty()
 			return false
 		end
-		
+				
 		-- Checking if essential elements of data are existing
 		if not unready.__version or not unready.__bounds or not unready.__data or not unready.__flag then
 			penalty()
 			return false
 		end
-		
+				
 		-- Checking if bound elements in the data are existed
 		if not unready.__bounds or not unready.__bounds.id or not unready.__bounds.since or not unready.__bounds.serverid then
 			penalty()
 			return false
 		end
-		
+				
 		-- Checking if the data is owned by this server
 		if unready.__bounds.serverid ~= ServerId then
 			penalty()
 			return false
 		end
-		
+				
 		-- Checking if the data is owned by this player
 		if record.Owner and record.Owner.UserId ~= unready.__bounds.id then
 			penalty()
 			return false
 		end
-		
+				
 		-- Checking if the data is still bound to this player
 		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
 		if now - unready.__bounds.since > timeout then
 			penalty()
 			return false
 		end
-		
+				
 		-- Checking if player is still in the server
 		local playerFound = false
 		while record.Owner and not playerFound do
 			-- If the player is still in the server, then it's ready
-			if Players:GetPlayerByUserId(record.Owner.UserId) then
+			if Players:GetPlayerByUserId(record.Owner.UserId) ~= nil then
 				playerFound = true
-			-- If timeout is set, then it's not ready yet
+				-- If timeout is set, then it's not ready yet
 			elseif workspace:GetServerTimeNow() - now > FindingPlayerTimeout then
 				penalty()
 				return false
@@ -1091,7 +1104,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				task.wait(1)
 			end
 		end
-		
+				
 		local compressedData = unready.__data
 		local flagData = unready.__flag -- 'C' means compressed, 'R' means raw/real
 		
@@ -1101,22 +1114,23 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		-- Checking if the data is successfully decompressed
 		if not success then
+			warn(data)
 			penalty()
 			return false
 		end
-		
+				
 		-- Checking if the data is a table
 		if typeof(data) ~= "table" then
 			penalty()
 			return false
 		end
-		
+				
 		-- Checking if the data size is not too big
 		if Compressor.GetSize(data) > meta.MaxDecompressedSize then
 			penalty()
 			return false
 		end
-		
+				
 		-- Reconcilate the data with the blueprint, to prevent data corruption or data loss
 		reconcile(data, meta.DataBlueprint)
 		
@@ -1125,7 +1139,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-		
+				
 		-- Clamping all values with the validations, if the element was a number type
 		clamp_values(meta, record, data)
 		
@@ -1134,7 +1148,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-		
+				
 		-- Apply the data to the cache
 		record.Data = data -- Data is now ready to be used
 		record.CurrentState = "Ready" -- Current state is ready to do things
@@ -1144,6 +1158,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		meta._DataCache[record.Key] = unready -- Catch the record after filter
 		meta._DataCache[record.Key].__data = data  -- Cache the real data after compression
+		
+		meta._ActiveRecords[record.Key] = record -- Add the record to active records, so developer can access the record
 		
 		record._ReadyProgress = false
 		
@@ -1221,6 +1237,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record._SleepProgress = false
 			
 			meta._DataCache[record.Key] = nil
+			meta._ActiveRecords[record.Key] = nil
 			
 			return true
 		end
@@ -1235,25 +1252,35 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		print("1")
+		
 		if record._SaveProgress then
 			return false
 		end
 		record._SaveProgress = true
+		
+		print("2")
 		
 		if record._SleepProgress then
 			record._SaveProgress = false
 			return false
 		end
 		
+		print("3")
+		
 		if record._ReadyProgress then
 			record._SaveProgress = false
 			return false
 		end
 		
+		print("4")
+		
 		if record.CurrentState ~= "Ready" then
 			record._SaveProgress = false
 			return false
 		end
+		
+		print("5")
 		
 		local data = meta._DataCache[record.Key]
 		if not data or not data.__data then
@@ -1261,10 +1288,14 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		print("6")
+		
 		if record.Data == nil then
 			record._SaveProgress = false
 			return false
 		end
+		
+		print("7")
 		
 		meta._LockSessions:Do(record.Key, function()
 			local commitedData = Data or record.Data
@@ -1284,6 +1315,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		if success then
 			return true
 		end
+		
+		print("8")
 		
 		return false
 	end
@@ -1444,7 +1477,8 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._CurrentDataStore = DataStoreService:GetDataStore(DataStoreName, Scope)
 	self._CurrentWALDataStore = DataStoreService:GetDataStore(DataStoreName..self.WALDataSuffix, Scope)
 	self._CurrentArchivedDataStore = DataStoreService:GetDataStore(DataStoreName..self.ArchivationSuffix, Scope)	
-
+	
+	self._ActiveRecords = {} -- { [Key: string] = UDCRecord }
 	self._SaveTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SwapTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
