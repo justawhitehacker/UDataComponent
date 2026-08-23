@@ -22,6 +22,8 @@ local PlaceId = game.PlaceId
 
 local ConnectionTest = DataStoreService:GetDataStore("ConnectionTest-" .. PlaceId)
 
+local EMERGENCY_COMPRESSION_LEVEL = 0
+
 local InfosStorage = {}
 
 UDataComponent.Enabled = true
@@ -32,7 +34,7 @@ UDataComponent.Enabled = true
 	"WakingUp" -> where the record is claimed by a server, but not yet confirmed by the server
 	"Ready" -> where the record is ready to be used
 	"Sleeping" -> where the record is released by the server, but not yet confirmed by the server
-	"Died" -> where the record is getting detached, along the release
+	"Died" -> where the record is getting detached or removed, along the release
 	"Reborn" -> where the record is getting unarchived, and start to awake
 --]]
 
@@ -492,6 +494,53 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	return result
 end
 
+local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
+	local now = workspace:GetServerTimeNow()
+	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	
+	local dataCache = meta._DataCache[record.Key]
+	if not dataCache then return end
+	
+	dataCache.__version = (dataCache.__version or 0) + 1
+	local success, err = pcall(function()
+		return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+			if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+				local id = CurrentData.__bounds.id
+				local serverid = CurrentData.__bounds.serverid
+				local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
+				
+				local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
+				
+				local isDifferentOwner = thisOwnerId ~= id			
+				local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+				
+				local isCacheStale = now - (dataCache.__bounds and dataCache.__bounds.since or 0) > meta.StaleServerClaimingTime
+				
+				local isServerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.serverid and dataCache.__bounds.serverid ~= serverid and not isCacheStale
+				local isOwnerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.id and dataCache.__bounds.id ~= id
+				
+				-- If the data from cache is owned by a different player or a different server, return nil to force an invalid result
+				if isServerNotSameAsCache or isOwnerNotSameAsCache then
+					return nil
+				end
+				
+				-- If the data is owned by a different player or a different server, return nil to force an invalid result
+				if isDifferentOwner or isDifferentServer then
+					return nil
+				end
+			end
+			
+			CurrentData = CurrentData or dataCache or meta._CompressedBlueprint
+			
+			if dataCache.__version and dataCache.__version > (CurrentData and CurrentData.__version or 0) then
+				CurrentData = dataCache
+			end
+			
+			return CurrentData
+		end)
+	end)
+end
+
 local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
 	if not meta.BackupEnabled then
 		return nil
@@ -551,11 +600,11 @@ local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
 end
 
 local function run_load_queue(meta : __UDCInfo_Internal)
-	if meta._IsObtainingRunning then return end
+	if meta._IsObtainingRunning or meta._ShutdownCalled then return end
 	meta._IsObtainingRunning = true
 	
 	RunService.Heartbeat:Connect(function(_)
-		if not meta.Enabled or not UDataComponent.Enabled then return end -- Preventing dead UDataComponent to do commands
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
 		
 		local obtain = meta._ObtainPendingQueue
 		local perTick = meta.MaxDataObtainingPerTick
@@ -570,7 +619,7 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 				break -- No budget left, stops current load request until next frame
 			end
 
-			if first.Meta.Owner and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
+			if first.Meta and first.Meta.Owner and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
 				task.spawn(first.Thread, false, nil) -- Player left, cancel the load request
 				continue
 			end
@@ -585,6 +634,41 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 
 				meta._CurrentLoadWorkers -= 1 -- Workers finised the work
 				task.spawn(first.Thread, success, result) -- Continue the thread, regardless of the result
+			end)
+		end
+	end)
+end
+
+local function run_save_queue(meta : __UDCInfo_Internal)
+	if meta._IsRunning or meta._ShutdownCalled then return end
+	meta._IsRunning = true
+	
+	RunService.Heartbeat:Connect(function(_)
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
+		
+		local save = meta._SavePendingQueue
+		local perTick = meta.MaxDataSavingPerTick
+		
+		while #save > 0 and meta._CurrentSaveWorkers < meta.MaxConcurrentSaveWorkers do
+			local first = table.remove(save, 1)
+			
+			local saveBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+			
+			if saveBudget < perTick then
+				break -- No budget left, stops current save request until next frame
+			end
+			
+			if first.Meta and first.Meta.Key and not meta._DataCache[first.Meta.Key] then
+				task.spawn(first.Thread, false) -- Data is already unloaded, cancel the save request
+				continue
+			end
+			
+			meta._CurrentSaveWorkers += 1 -- Workers in working
+			task.spawn(function()
+				local success = pcall(save_data, meta, first.Meta)
+				
+				meta._CurrentSaveWorkers -= 1 -- Workers finised the work
+				task.spawn(first.Thread, success) -- Continue the thread, regardless of the result
 			end)
 		end
 	end)
@@ -729,6 +813,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record._ReadyProgress = false -- This is to indicate if the record's ready in progress
 	record._SleepProgress = false -- This is to indicate if the record's sleep in progress
 	
+	record._LastCompressedData = nil -- This is to store the last compressed data
+	record._LastFlagData = nil -- This is to store the last flag data, of compression
+	record._CompressionDirtyFlag = false -- This is to indicate if the record's data is dirty, meaning it hasn't been compressed yet
+	
 	-- State machines: Asleep -> WakingUp -> Ready -> Sleeping || Asleep
 	-- Difference of Asleep and Sleeping, Asleep is when the data is loaded first time, meanwhile Sleeping is when the data is released and saved, but can be called by Awake again
 	
@@ -738,7 +826,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	end
 	
 	-- Real flows usage:
-	-- Awake() -> Ready() -> Standby() || Sleep()
+	-- Awake() -> Ready() -> Standby() -> Save() -> Sleep() -> Record died
+	-- In Standby(), it will automatically handle Save() and Sleep() when triggered, it could be player leaving or server shutdown
 	
 	-- Use Standby() if want the data releasing and saving data automaticaly by UDC
 	-- Use Sleep() if you want to handle the data releasing and saving data manually
@@ -965,14 +1054,30 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		dataCache.__bounds.serverid = nil
-		dataCache.__bounds.lastheartbeat = nil
-		dataCache.__bounds.since = now -- update the bounds
-		
 		record.CurrentState = "Asleep"
 		record._SleepProgress = false
 		
-		return true
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0		
+		local success = pcall(function()
+			return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.serverid and CurrentData.__bounds.lastheartbeat and CurrentData.__bounds.id then
+					local isSameServer = CurrentData.__bounds.serverid == ServerId
+					local isSameOwner = CurrentData.__bounds.id == thisOwnerId
+					
+					if isSameServer and isSameOwner then
+						CurrentData.__bounds.serverid = nil
+						CurrentData.__bounds.lastheartbeat = nil
+						CurrentData.__bounds.since = now
+					end
+					
+					return CurrentData
+				end
+				
+				return nil
+			end)
+		end)
+		
+		return success
 	end
 	
 	function record:Save(Data: any?, SegmentIndex: number?)
