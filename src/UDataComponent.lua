@@ -1492,6 +1492,13 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	
 	-- Reluctantly saving current data from the modification of .Data from record, but you can use another data to save
 	-- Use SegmentIndex if you ever want to make cheaper data to save
+	-----------------------------------------------------------------------------------
+	-- Just remember, Save() didn't check the validations of the data before commit
+	-- We know that with Ready(), everything will be validated before the record state checked to ready, and you can't trigger fast-compression to compress the data when modifying the data
+	-- But, don't you think that you can make a "safety-first" with Write() that validates the data before commited to the data store?
+	-- Because, when you tried to load and ready, but some datas are not valid, you can't obtain it
+	-- So, I would recommend you to use Write() when your data wants more secure, particularly to validates the data first before commit
+	-- Use Save() for manual control, but beware of what you did
 	function record:Save(Data: any?, SegmentIndex: number?)
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
@@ -1588,21 +1595,27 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		local customData = deepclone(data.__data)
-		local success = pcall(WritingFunction, customData)
+		local customData = deepclone(data.__data) -- use deep-cloned table, so that the main data can't be changed, to prevent some "malicious" or "accident" data modifications
+		local success
+		meta._LockSessions:Do(record.Key, function()
+			success = pcall(WritingFunction, customData) -- this function returns nothing, but change the data safely
+		end)
 		
 		if not success then
 			record._SaveProgress = false
 			return false
 		end
 		
+		-- schema validations, when data types are valid
 		if not are_schemas_valid(meta, record, customData) then
 			record._SaveProgress = false
 			return false
 		end
 		
+		-- clamp values that is a number
 		clamp_values(meta, record, customData)
 		
+		-- predicate validations, this is where your data "must operate in this case"
 		if not are_datas_valid(meta, record, customData) then
 			record._SaveProgress = false
 			return false
@@ -1626,16 +1639,16 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		return false
 	end
 	
+	-- Same as Save() but the data is commiting explicitly into datastore
+	-- Use it for immediate saving operations, ex. Player Leaving or Manual Trading
+	-- However, Standby() has given you a service for saving data automatically, with this ForceSave()
+	-- But you can use it anyway, the explicit data commiting is still in Mutex lock to prevent race conditions
 	function record:ForceSave(Data: any?, SegmentIndex: number?)
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
 		end
-
+		
 		local now = workspace:GetServerTimeNow()
-		if meta._WriteTimestamp[record.Key] and now - meta._WriteTimestamp[record.Key] > meta.DataWritingCooldown then
-			return false
-		end
-
 		if record._SaveProgress then
 			return false
 		end
@@ -1746,7 +1759,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					
 					CurrentData = CurrentData or clonedRecord or deepclone(meta._CompressedBlueprint)
 					
-					if clonedRecord.__version and CurrentData and clonedRecord.__version > (CurrentData.__vision or 0) then
+					if clonedRecord.__version and CurrentData and clonedRecord.__version > (CurrentData.__version or 0) then
 						CurrentData = clonedRecord
 					end
 					
@@ -1776,7 +1789,157 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	end
 	
 	function record:ForceWrite(WritingFunction: (CurrentData: any) -> ())
+		if not meta.Enabled or not UDataComponent.Enabled then
+			return false
+		end
 		
+		local now = workspace:GetServerTimeNow()
+		if record.CurrentState ~= "Ready" then
+			return false
+		end
+		
+		if record._SaveProgress then
+			return false
+		end
+		record._SaveProgress = true
+		
+		if record._ReadyProgress then
+			record._SaveProgress = false
+			return false
+		end
+		
+		if record._SleepProgress then
+			record._SaveProgress = false
+			return false
+		end
+		
+		local data = meta._DataCache[record.Key]
+		if not data or record.Data == nil then
+			record._SaveProgress = false
+			return false
+		end
+		
+		local clonedRecord = deepclone(data)
+		local clonedData = deepclone(clonedRecord.__data)
+		local success
+		meta._LockSessions:Do(record.Key, function()
+			success = pcall(WritingFunction, clonedData)
+		end)
+		
+		if not success then
+			record._SaveProgress = false
+			return false
+		end
+		
+		if not are_schemas_valid(meta, record, clonedData) then
+			record._SaveProgress = false
+			return false
+		end
+		
+		clamp_values(meta, record, clonedData)
+		
+		if not are_datas_valid(meta, record, clonedData) then
+			record._SaveProgress = false
+			return false
+		end
+		
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+		local isSuccess = false
+		meta._LockSessions:Do(record.Key, function()
+			data.__data = clonedData
+			record.Data = deepclone(clonedData)
+			
+			local compressed, flag
+			local found = false
+
+			local existed = meta._CompressionStack[record.Key]
+
+			if existed then
+				if not existed.Dirty and record._LastCompressedData and record._LastFlagData then
+					compressed, flag = record._LastCompressedData, record._LastFlagData
+				else
+					local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedData)
+
+					if not ok then return false end
+
+					compressed, flag = newCompressed, newFlag
+
+					record._LastCompressedData = compressed
+					record._LastFlagData = flag
+
+					existed.Tick = now
+					existed.Dirty = false
+				end
+			else
+				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedData)
+				if not ok then return false end
+
+				compressed, flag = newCompressed, newFlag
+
+				record._LastCompressedData = compressed
+				record._LastFlagData = flag
+			end
+
+			clonedRecord.__version = (clonedRecord.__version or 0) + 1
+			clonedRecord.__flag = flag
+
+			record.Version = clonedRecord.__version
+			
+			local success, result = pcall(function()
+				return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+					if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid and CurrentData.__bounds.lastheartbeat then
+						local id = CurrentData.__bounds.id
+						local serverid = CurrentData.__bounds.serverid
+						local lastheartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+						local isStale = now - lastheartbeat > meta.StaleServerClaimingTime
+
+						local isDifferentServer = serverid ~= ServerId and not isStale
+						local isDifferentOwner = id ~= thisOwnerId
+
+						local isCacheStale = now - (clonedRecord.__bounds and clonedRecord.__bounds.since or 0) > meta.StaleServerClaimingTime
+
+						local isServerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.serverid and clonedRecord.__bounds.serverid ~= ServerId and clonedRecord.__bounds.serverid ~= serverid and not isCacheStale
+						local isOwnerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.id and clonedRecord.__bounds.id ~= thisOwnerId and clonedRecord.__bounds.id ~= id
+
+						if isServerNotSameAsCache or isOwnerNotSameAsCache then
+							return nil
+						end
+
+						if isDifferentServer or isDifferentOwner then
+							return nil
+						end
+					end
+
+					CurrentData = CurrentData or clonedRecord or deepclone(meta._CompressedBlueprint)
+
+					if clonedRecord.__version and CurrentData and clonedRecord.__version > (CurrentData.__version or 0) then
+						CurrentData = clonedRecord
+					end
+
+					CurrentData.__data = compressed
+					CurrentData.__bounds.since = now
+					return CurrentData
+				end)
+			end)
+			
+			isSuccess = success and result
+		end)
+		
+		if isSuccess then
+			local walSuccess, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
+
+			if walSuccess and result then
+				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
+			end
+
+			if meta._SavePendingQueue[record.Key] then
+				meta._SavePendingQueue[record.Key] = nil
+			end
+		end
+		record._SaveProgress = false
+
+		return isSuccess
 	end
 	
 	function record:Detach()
