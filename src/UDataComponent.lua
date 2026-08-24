@@ -1157,6 +1157,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record._SleepProgress = false -- This is to indicate if the record's sleep in progress
 	record._SaveProgress = false -- This is to indicate if the record's save in progress, where Save and Write shares this variable
 	-- Because Write and Save are same, but have different roles in record commiting
+	record._CurrentlyStandby = false -- This is to indicate if the record is currently in standby mode
 	
 	record._LastCompressedData = nil -- This is to store the last compressed data
 	record._LastFlagData = nil -- This is to store the last flag data, of compression
@@ -1377,7 +1378,36 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	end
 	
 	function record:Standby()
+		if not meta.Enabled or not UDataComponent.Enabled then
+			return false
+		end
 		
+		if record.CurrentState ~= "Ready" then
+			return false
+		end
+		
+		if record._CurrentlyStandby then
+			return false
+		end
+		
+		if record._ReadyProgress then
+			return false
+		end
+		
+		if record._SleepProgress then
+			return false
+		end
+		
+		if record._SaveProgress then
+			return false
+		end
+		
+		if record.Data == nil or meta._DataCache[record.Key] == nil then
+			return false
+		end
+		
+		local success = add_standby_record(meta, record)
+		return success
 	end
 	
 	-- Releasing the data from session, where this means this record has been fell asleep and cannot use the data anymore, unless you call Awake() to wake it up again
@@ -1449,6 +1479,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			
 			meta._DataCache[record.Key] = nil
 			meta._ActiveRecords[record.Key] = nil
+			meta._StandbyRegistry[record.Key] = nil
 			
 			return true
 		end
