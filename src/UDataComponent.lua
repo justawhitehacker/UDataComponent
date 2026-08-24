@@ -933,6 +933,8 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 	end)
 	
 	game:BindToClose(function()
+		meta._ShutdownCalled = true
+		
 		local workerThreads = {}
 		local working = { count = 0 }
 		
