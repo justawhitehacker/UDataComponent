@@ -877,9 +877,7 @@ local function run_save_queue(meta : __UDCInfo_Internal)
 			meta._CurrentSaveWorkers += 1 -- Workers in working
 			task.spawn(function()
 				local success, err = pcall(save_data, meta, first.Meta)
-				
-				print(success, err)
-				
+								
 				meta._CurrentSaveWorkers -= 1 -- Workers finised the work
 				task.spawn(first.Thread, success) -- Continue the thread, regardless of the result
 			end)
@@ -1225,37 +1223,31 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		if not UDataComponent.IsAlive() then
 			return false
 		end
-		
-		print("1")
+				
+		if meta._ShutdownCalled then
+			return false
+		end
 				
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
 		end
-		
-		print("2")
-				
+						
 		-- Whether the data is already waking up or not, if not, maybe cannot ready or already running
 		if record.CurrentState ~= "WakingUp" then
 			return false
 		end
-		
-		print("3")
-				
+						
 		if record._ReadyProgress then
 			return false
 		end
-		
-		print("4")
-				
+						
 		record._ReadyProgress = true
 		
 		if meta._DataCache[record.Key] ~= nil then
 			record.CurrentState = "Sleeping"
 			return false
 		end
-		
-		print("5")	
-		
+				
 		local now = workspace:GetServerTimeNow()
 		local unready = meta._UnreadyData[record.Key]
 		
@@ -1266,64 +1258,48 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end		
 		
-		print("6")	
-
 		if meta._ActiveRecords[record.Key] then
 			penalty()
 			return false
 		end
-		
-		print("7")	
-				
+						
 		-- Checking if the was archived or not
 		if record.IsArchived then
 			penalty()
 			return false
 		end
-		
-		print("8")	
-				
+						
 		-- Checking if essential elements of data are existing
 		if not unready.__version or not unready.__bounds or not unready.__data or not unready.__flag then
 			penalty()
 			return false
 		end
-		
-		print("9")	
-				
+						
 		-- Checking if bound elements in the data are existed
 		if not unready.__bounds or not unready.__bounds.id or not unready.__bounds.since or not unready.__bounds.serverid then
 			penalty()
 			return false
 		end
-		
-		print("10")	
-				
+						
 		-- Checking if the data is owned by this server
 		if unready.__bounds.serverid ~= ServerId then
 			penalty()
 			return false
 		end
-		
-		print("11")	
-				
+						
 		-- Checking if the data is owned by this player
 		if record.Owner and record.Owner.UserId ~= unready.__bounds.id then
 			penalty()
 			return false
 		end
-		
-		print("12")	
-				
+						
 		-- Checking if the data is still bound to this player
 		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
 		if now - unready.__bounds.since > timeout then
 			penalty()
 			return false
 		end
-		
-		print("13")	
-				
+						
 		-- Checking if player is still in the server
 		local playerFound = false
 		while record.Owner and not playerFound do
@@ -1338,9 +1314,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				task.wait(1)
 			end
 		end
-		
-		print("14")	
-				
+						
 		local compressedData = unready.__data
 		local flagData = unready.__flag -- 'C' means compressed, 'R' means raw/real
 		
@@ -1354,25 +1328,19 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-		
-		print("15")	
-				
+						
 		-- Checking if the data is a table
 		if typeof(data) ~= "table" then
 			penalty()
 			return false
 		end
-		
-		print("16")	
-				
+						
 		-- Checking if the data size is not too big
 		if Compressor.GetSize(data) > meta.MaxDecompressedSize then
 			penalty()
 			return false
 		end
-		
-		print("17")	
-				
+						
 		-- Reconcilate the data with the blueprint, to prevent data corruption or data loss
 		reconcile(data, meta.DataBlueprint)
 		
@@ -1381,9 +1349,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-		
-		print("18")	
-				
+						
 		-- Clamping all values with the validations, if the element was a number type
 		clamp_values(meta, record, data)
 		
@@ -1392,9 +1358,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-		
-		print("19")	
-				
+						
 		-- Apply the data to the cache
 		record.Data = data -- Data is now ready to be used
 		record.CurrentState = "Ready" -- Current state is ready to do things
@@ -1499,51 +1463,37 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		print("1")
-		
 		if record._SaveProgress then
 			return false
 		end
 		record._SaveProgress = true
-		
-		print("2")
-		
+				
 		if record._SleepProgress then
 			record._SaveProgress = false
 			return false
 		end
-		
-		print("3")
-		
+				
 		if record._ReadyProgress then
 			record._SaveProgress = false
 			return false
 		end
-		
-		print("4")
-		
+				
 		if record.CurrentState ~= "Ready" then
 			record._SaveProgress = false
 			return false
 		end
-		
-		print("5")
-		
+				
 		local data = meta._DataCache[record.Key]
 		if not data or not data.__data then
 			record._SaveProgress = false
 			return false
 		end
-		
-		print("6")
-		
+				
 		if record.Data == nil then
 			record._SaveProgress = false
 			return false
 		end
-		
-		print("7")
-		
+				
 		meta._LockSessions:Do(record.Key, function()
 			local commitedData = Data or record.Data
 			if SegmentIndex then
@@ -1562,9 +1512,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		if success then
 			return true
 		end
-		
-		print("8")
-		
+				
 		return false
 	end
 	
