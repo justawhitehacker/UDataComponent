@@ -36,6 +36,11 @@ C. Exclusive Access (Single Server)
 Result of Exclusive Access (Single Server) Testing: PARTIALLY SUCCESS, No.1 failed
 New Result: FIXED, SUCCESS
 
+D. Multi Server testing (CRUCIAL)
+1. When a player Awake() his own record, the server and the player claimed the record. When another server and even another player tries to Awake() the same record, it will return false
+2. When the owner of record released the session with Sleep(), another server that tries to claim record with Awake(), it will be able to claim the record
+3.
+
 --]]
 
 
@@ -133,10 +138,7 @@ export type UDCInfo = {
 	ValidationEnabled : boolean, -- If this UDataComponent's info allowed to validate the data that came from commit
 	CallbackEnabled : boolean, -- If this UDataComponent's info allowed to fire callback functions
 	WALEnabled : boolean, -- If this UDataComponent's info allowed to use Write Ahead Logging, WAL called at fatal-points, like server shutdown or player leaving with save queue pended
-	DefaultDataLoadingAttempts : number, --  Strictly gives some attempts to data loading when tries to load the data
-	DefaultDataLoadingYieldDuration : number, -- Yield duration between each attempt of load the data
-	DefaultDataSavingAttempts : number, -- Strictly gives some attempts to save the data when tries to saving data
-	DefaultDataSavingYieldDuration : number, -- Yield duration between each attempt of saving data
+	DataWritingCooldown : number, -- Cooldown between each data write
 	MaxKeyLength : number, -- Maximum key-length for each keys
 	BackupEnabled : boolean, -- If this UDataComponent's info allowed to call backup data when fatal error occurs
 	DefaultBackupAttempts : number, --  Strictly gives some attempts to get the data-backup when normal load failed
@@ -196,7 +198,7 @@ export type __UDCInfo_Internal = {
 	
 	_CompressedBlueprint : { any },
 
-	_SaveTimestamp : { any? },
+	_WriteTimestamp : { any? },
 	_SwapTimestamp : { any? },
 	_AutosaveTimestamp : { any? },
 	_SavePendingQueue : { any? },
@@ -231,10 +233,7 @@ export type __UDCInfo_Internal = {
 	ValidationEnabled : boolean, -- If this UDataComponent's info allowed to validate the data that came from commit
 	CallbackEnabled : boolean, -- If this UDataComponent's info allowed to fire callback functions
 	WALEnabled : boolean, -- If this UDataComponent's info allowed to use Write Ahead Logging, WAL called at fatal-points, like server shutdown or player leaving with save queue pended
-	DefaultDataLoadingAttempts : number, --  Strictly gives some attempts to data loading when tries to load the data
-	DefaultDataLoadingYieldDuration : number, -- Yield duration between each attempt of load the data
-	DefaultDataSavingAttempts : number, -- Strictly gives some attempts to save the data when tries to saving data
-	DefaultDataSavingYieldDuration : number, -- Yield duration between each attempt of saving data
+	DataWritingCooldown : number, -- Cooldown between each data write
 	MaxKeyLength : number, -- Maximum key-length for each keys
 	BackupEnabled : boolean, -- If this UDataComponent's info allowed to call backup data when fatal error occurs
 	DefaultBackupAttempts : number, --  Strictly gives some attempts to get the data-backup when normal load failed
@@ -496,44 +495,47 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	local attempts = 0
 	
 	-- Use UpdateAsync to load data, also handle the WAL
-	local success, result = pcall(function()
-		return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
-			-- Checking if current data have these bound elements
-			if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
-				local bounds = CurrentData.__bounds
-				local id = CurrentData.__bounds.id -- UserId of the player who owns this data
-				local serverid = CurrentData.__bounds.serverid -- ServerID (JobID) of server whose this data to commit
-				local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0 -- Time when the server claimed this data
-				
-				-- Checking if the server is still alive
-				local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
-								
-				local isDifferentOwner = thisOwnerId ~= id -- Checking if the owner is different
-				local isDifferentServer = serverid and serverid ~= ServerId and not isStale -- Checking if the server is different and not dead/stale
-				
-				-- If the data is owned by a different player or a different server, return nil to force an invalid result
-				if isDifferentOwner or isDifferentServer then
-					return nil
+	local success, result
+	meta._LockSessions:Do(record.Key, function()
+		success, result = pcall(function()
+			return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+				-- Checking if current data have these bound elements
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+					local bounds = CurrentData.__bounds
+					local id = CurrentData.__bounds.id -- UserId of the player who owns this data
+					local serverid = CurrentData.__bounds.serverid -- ServerID (JobID) of server whose this data to commit
+					local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0 -- Time when the server claimed this data
+
+					-- Checking if the server is still alive
+					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
+
+					local isDifferentOwner = thisOwnerId ~= id -- Checking if the owner is different
+					local isDifferentServer = serverid and serverid ~= ServerId and not isStale -- Checking if the server is different and not dead/stale
+
+					-- If the data is owned by a different player or a different server, return nil to force an invalid result
+					if isDifferentOwner or isDifferentServer then
+						return nil
+					end
 				end
-			end
-			
-			-- If the data is not exist, or the data is exist but the server is dead/stale, use the WAL entry, or the compressed blueprint
-			CurrentData = CurrentData or entry or deepclone(meta._CompressedBlueprint)
-			
-			-- Checking WAL entry if exist and has a newer version than the current data
-			if entry and entry.__version and entry.__version > (CurrentData.__version or 0) then
-				-- Use the WAL entry if it's newer
-				CurrentData = entry
-			end
-			
-			-- Rebinding the data with the new bounds, if some elements are already belongs to a player or something, it remains same
-			CurrentData.__bounds = {
-				id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerId,
-				serverid = ServerId,
-				since = CurrentData.__bounds and CurrentData.__bounds.since or now,
-				lastheartbeat = now,
-			}
-			return CurrentData
+
+				-- If the data is not exist, or the data is exist but the server is dead/stale, use the WAL entry, or the compressed blueprint
+				CurrentData = CurrentData or entry or deepclone(meta._CompressedBlueprint)
+
+				-- Checking WAL entry if exist and has a newer version than the current data
+				if entry and entry.__version and entry.__version > (CurrentData.__version or 0) then
+					-- Use the WAL entry if it's newer
+					CurrentData = entry
+				end
+
+				-- Rebinding the data with the new bounds, if some elements are already belongs to a player or something, it remains same
+				CurrentData.__bounds = {
+					id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerId,
+					serverid = ServerId,
+					since = CurrentData.__bounds and CurrentData.__bounds.since or now,
+					lastheartbeat = now,
+				}
+				return CurrentData
+			end)
 		end)
 	end)
 	
@@ -615,8 +617,6 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 					local isServerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.serverid and dataCache.__bounds.serverid ~= serverid and not isCacheStale
 					local isOwnerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.id and dataCache.__bounds.id ~= id
 					
-					print("ok")
-
 					-- If the data from cache is owned by a different player or a different server, return nil to force an invalid result
 					if isServerNotSameAsCache or isOwnerNotSameAsCache then
 						return nil
@@ -1297,6 +1297,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					if isSameServer and isSameOwner then
 						CurrentData.__bounds.serverid = nil
 						CurrentData.__bounds.lastheartbeat = nil
+						CurrentData.__bounds.id = nil
 						CurrentData.__bounds.since = now
 					end
 					
@@ -1407,6 +1408,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		local now = workspace:GetServerTimeNow()
+		if meta._WriteTimestamp[record.Key] and now - meta._WriteTimestamp[record.Key] > meta.DataWritingCooldown then
+			return false
+		end
+		
 		if record._SaveProgress then
 			return false
 		end
@@ -1463,6 +1469,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		record._SaveProgress = false
 		if success then
+			meta._WriteTimestamp[record.Key] = now
 			return true
 		end
 		
@@ -1470,7 +1477,148 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	end
 	
 	function record:ForceSave(Data: any?, SegmentIndex: number?)
+		if not meta.Enabled or not UDataComponent.Enabled then
+			return false
+		end
+
+		local now = workspace:GetServerTimeNow()
+		if meta._WriteTimestamp[record.Key] and now - meta._WriteTimestamp[record.Key] > meta.DataWritingCooldown then
+			return false
+		end
+
+		if record._SaveProgress then
+			return false
+		end
+		record._SaveProgress = true
+
+		if record._SleepProgress then
+			record._SaveProgress = false
+			return false
+		end
+
+		if record._ReadyProgress then
+			record._SaveProgress = false
+			return false
+		end
+
+		if record.CurrentState ~= "Ready" then
+			record._SaveProgress = false
+			return false
+		end
+
+		local data = meta._DataCache[record.Key]
+		if not data or not data.__data then
+			record._SaveProgress = false
+			return false
+		end
+
+		if record.Data == nil then
+			record._SaveProgress = false
+			return false
+		end
 		
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+		
+		local isSuccess = false
+		meta._LockSessions:Do(record.Key, function()
+			local commitedData = Data or record.Data
+			
+			if SegmentIndex then
+				data.__data[SegmentIndex] = commitedData
+			else
+				data.__data = commitedData
+			end		
+
+			record.Data = deepclone(data.__data)
+			
+			local compressed, flag
+			local found = false
+
+			local existed = meta._CompressionStack[record.Key]
+
+			if existed then
+				if not existed.Dirty and record._LastCompressedData and record._LastFlagData then
+					compressed, flag = record._LastCompressedData, record._LastFlagData
+				else
+					local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, data.__data)
+
+					if not ok then
+						return false
+					end
+
+					compressed, flag = newCompressed, newFlag
+
+					record._LastCompressedData = compressed
+					record._LastFlagData = flag
+
+					existed.Tick = now
+					existed.Dirty = false
+				end
+			else
+				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, data.__data)
+				if not ok then return false end
+
+				compressed, flag = newCompressed, newFlag
+
+				record._LastCompressedData = compressed
+				record._LastFlagData = flag
+			end
+			
+			data.__version = (data.__version or 0) + 1
+			data.__flag = flag
+			
+			record.Version = data.__version
+			
+			local success, result = pcall(function()
+				return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+					if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid and CurrentData.__bounds.lastheartbeat then
+						local id = CurrentData.__bounds.id
+						local serverid = CurrentData.__bounds.serverid
+						local lastheartbeat = CurrentData.__bounds.lastheartbeat or 0
+						
+						local isStale = now - lastheartbeat > meta.StaleServerClaimingTime
+						
+						local isDifferentServer = serverid ~= ServerId and not isStale
+						local isDifferentOwner = id ~= thisOwnerId
+						
+						local isCacheStale = now - (data.__bounds and data.__bounds.since or 0) > meta.StaleServerClaimingTime
+
+						local isServerNotSameAsCache = data.__bounds and data.__bounds.serverid and data.__bounds.serverid ~= serverid and not isCacheStale
+						local isOwnerNotSameAsCache = data.__bounds and data.__bounds.id and data.__bounds.id ~= id
+						
+						if isServerNotSameAsCache or isOwnerNotSameAsCache then
+							return nil
+						end
+						
+						if isDifferentServer or isDifferentOwner then
+							return nil
+						end
+					end
+					
+					CurrentData = CurrentData or deepclone(data) or deepclone(meta._CompressedBlueprint)
+					
+					if data.__version and data.__version > (CurrentData.__vision or 0) then
+						CurrentData = deepclone(data)
+					end
+					
+					CurrentData.__data = compressed
+					return CurrentData
+				end)
+			end)
+			
+			isSuccess = success and result
+		end)
+		
+		if isSuccess then
+			local walSuccess, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
+			
+			if walSuccess and result then
+				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
+			end
+		end
+		record._SaveProgress = false
+
+		return isSuccess
 	end
 	
 	function record:ForceWrite(WritingFunction: (CurrentData: any) -> ())
@@ -1503,11 +1651,8 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.Enabled = true
 	self.ValidationEnabled = true
 	self.CallbackEnabled = true
-	self.DefaultDataLoadingAttempts = 5
-	self.DefaultDataLoadingYieldDuration = 3
 	self.WALEnabled = true
-	self.DefaultDataSavingAttempts = 5
-	self.DefaultDataSavingYieldDuration = 3
+	self.DataWritingCooldown = 3
 	self.MaxKeyLength = 50
 	self.BackupEnabled = true
 	self.DefaultBackupAttempts = 5
@@ -1558,7 +1703,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._CurrentArchivedDataStore = DataStoreService:GetDataStore(DataStoreName..self.ArchivationSuffix, Scope)	
 	
 	self._ActiveRecords = {} -- { [Key: string] = UDCRecord }
-	self._SaveTimestamp = {} -- { [Key: string] = timestamp: number }
+	self._WriteTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SwapTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SavePendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup } }
