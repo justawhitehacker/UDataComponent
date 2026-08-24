@@ -1615,6 +1615,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			if walSuccess and result then
 				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
 			end
+
+			if meta._SavePendingQueue[record.Key] then
+				meta._SavePendingQueue[record.Key] = nil
+			end
 		end
 		record._SaveProgress = false
 
