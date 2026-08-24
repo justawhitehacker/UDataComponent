@@ -217,6 +217,7 @@ export type __UDCInfo_Internal = {
 	_IsObtainingRunning : boolean,
 	_IsCompressionTimerRunning : boolean,
 	_CacheCleaningCalled : boolean,
+	_StandbyReady : boolean,
 	
 	_CurrentLoadWorkers : number,
 	_CurrentSaveWorkers : number,
@@ -640,7 +641,115 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 		end)
 	end)
 	
-	return success and result
+	local status = success and result
+	if status then
+		local standbyRegistry = meta._StandbyRegistry[record.Key]
+		if standbyRegistry then
+			standbyRegistry.Dirty = false
+		end
+	end
+	
+	return status
+end
+
+local function standby_release(meta : __UDCInfo_Internal, record : UDCRecord)
+	local sleep = record:Sleep()
+	if sleep then
+		meta._StandbyRegistry[record.Key] = nil
+	end
+end
+
+local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord, now : number)
+	local currentData = meta._DataCache[record.Key]
+	if not currentData then
+		return false
+	end
+	
+	local clonedRecord = deepclone(currentData)
+	clonedRecord.__version = (clonedRecord.__version or 0) + 1
+	
+	local data = deepclone(clonedRecord.__data)
+	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	
+	local compressed, flag
+	local found = false
+
+	local existed = meta._CompressionStack[record.Key]
+
+	if existed then
+		if not existed.Dirty and record._LastCompressedData and record._LastFlagData then
+			compressed, flag = record._LastCompressedData, record._LastFlagData
+		else
+			local ok, newCompressed, newFlag = pcall(Compressor.TryToCompress, data, EMERGENCY_COMPRESSION_LEVEL, meta.CompressionThreshold)
+
+			if not ok then return false end
+
+			compressed, flag = newCompressed, newFlag
+		end
+	else
+		local ok, newCompressed, newFlag = pcall(Compressor.TryToCompress, data, EMERGENCY_COMPRESSION_LEVEL, meta.CompressionThreshold)
+		if not ok then return false end
+
+		compressed, flag = newCompressed, newFlag
+	end
+	
+	local success, result
+	meta._LockSessions:Do(record.Key, function()
+		success, result = pcall(function()
+			return meta._CurrentWALDataStore:UpdateAsync(record.Key, function(CurrentData)
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+					local id = CurrentData.__bounds.id
+					local serverid = CurrentData.__bounds.serverid
+					local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
+					local isCacheStale = now - (clonedRecord.__bounds and clonedRecord.__bounds.lastheartbeat or 0) > meta.StaleServerClaimingTime
+
+					local isServerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.serverid and clonedRecord.__bounds.serverid ~= serverid and clonedRecord.__bounds.serverid ~= ServerId and not isCacheStale
+					local isOwnerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.id and clonedRecord.__bounds.id ~= id and clonedRecord.__bounds.id ~= thisOwnerId
+
+					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+					local isDifferentOwner = id and id ~= thisOwnerId and not isStale
+
+					if isServerNotSameAsCache or isOwnerNotSameAsCache then
+						return nil
+					end
+
+					if isDifferentServer or isDifferentOwner then
+						return nil
+					end
+				end
+
+				CurrentData = CurrentData or clonedRecord
+
+				if clonedRecord.__version and CurrentData and CurrentData.__version and clonedRecord.__version > (CurrentData.__version or 0) then
+					CurrentData = clonedRecord
+				end
+
+				CurrentData.__data = compressed
+				CurrentData.__flag = flag
+
+				return CurrentData
+			end)
+		end)
+	end)
+	
+	local result = success and result
+	
+	if result and not meta._ShutdownCalled then
+		local isForcedSaveSuccess = pcall(record.ForceSave, record)
+		local pendingSave = meta._SavePendingQueue[record.Key]
+		
+		if pendingSave then
+			meta._SavePendingQueue[record.Key] = nil
+		end
+		
+		if isForcedSaveSuccess then
+			pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
+		end
+	end
+	
+	return result
 end
 
 local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
@@ -803,6 +912,51 @@ local function run_compression_timer(meta : __UDCInfo_Internal)
 	end)
 end
 
+local function set_standby_place(meta : __UDCInfo_Internal)
+	if meta._StandbyReady or meta._ShutdownCalled then return end
+	meta._StandbyReady = true
+	
+	Players.PlayerRemoving:Connect(function(Player)
+		local userId = Player.UserId
+		local now = workspace:GetServerTimeNow()
+		
+		for key, record in pairs(meta._StandbyRegistry) do
+			local isPending = meta._SavePendingQueue[key]
+			local sameOwner = record.Owner and record.Owner.UserId == userId
+			
+			if sameOwner then
+				write_to_wal_or_fs(meta, record, now)
+				standby_release(meta, record)
+				break
+			end
+		end
+	end)
+	
+	game:BindToClose(function()
+		local workerThreads = {}
+		local working = { count = 0 }
+		
+		local now = workspace:GetServerTimeNow()
+		
+		for key, record in pairs(meta._StandbyRegistry) do
+			table.insert(workerThreads, task.spawn(function(working)
+				write_to_wal_or_fs(meta, record, now)
+				standby_release(meta, record)
+				
+				working.count -= 1
+			end, working))
+			
+			working.count += 1
+		end
+		
+		local seconds = 0
+		while #workerThreads > 0 and working.count > 0 and seconds < 25 do
+			seconds += 1
+			task.wait(1)
+		end
+	end)
+end
+
 local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
 	run_load_queue(meta) -- First-time run the load queue if it's not running
 	
@@ -845,6 +999,17 @@ local function push_compression_timer(meta : __UDCInfo_Internal, record : UDCRec
 	}
 	
 	return true
+end
+
+local function add_standby_record(meta : __UDCInfo_Internal, record : UDCRecord)
+	set_standby_place(meta)
+	
+	if not meta._StandbyRegistry[record.Key] then
+		meta._StandbyRegistry[record.Key] = record
+		return true
+	end
+	
+	return false
 end
 
 local function is_key_pending_load(meta : __UDCInfo_Internal, key : string)
@@ -1465,6 +1630,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end)
 		
 		push_compression_timer(meta, record)
+		
 		local success = enqueue_save(meta, record)
 		
 		record._SaveProgress = false
@@ -1528,9 +1694,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			else
 				data.__data = commitedData
 			end		
-
-			record.Data = deepclone(data.__data)
 			
+			local clonedRecord = deepclone(data)
+			record.Data = deepclone(clonedRecord.__data)
+						
 			local compressed, flag
 			local found = false
 
@@ -1540,11 +1707,9 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				if not existed.Dirty and record._LastCompressedData and record._LastFlagData then
 					compressed, flag = record._LastCompressedData, record._LastFlagData
 				else
-					local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, data.__data)
+					local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedRecord.__data)
 
-					if not ok then
-						return false
-					end
+					if not ok then return false end
 
 					compressed, flag = newCompressed, newFlag
 
@@ -1555,7 +1720,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					existed.Dirty = false
 				end
 			else
-				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, data.__data)
+				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedRecord.__data)
 				if not ok then return false end
 
 				compressed, flag = newCompressed, newFlag
@@ -1564,10 +1729,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				record._LastFlagData = flag
 			end
 			
-			data.__version = (data.__version or 0) + 1
-			data.__flag = flag
+			clonedRecord.__version = (clonedRecord.__version or 0) + 1
+			clonedRecord.__flag = flag
 			
-			record.Version = data.__version
+			record.Version = clonedRecord.__version
 			
 			local success, result = pcall(function()
 				return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
@@ -1581,10 +1746,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 						local isDifferentServer = serverid ~= ServerId and not isStale
 						local isDifferentOwner = id ~= thisOwnerId
 						
-						local isCacheStale = now - (data.__bounds and data.__bounds.since or 0) > meta.StaleServerClaimingTime
+						local isCacheStale = now - (clonedRecord.__bounds and clonedRecord.__bounds.since or 0) > meta.StaleServerClaimingTime
 
-						local isServerNotSameAsCache = data.__bounds and data.__bounds.serverid and data.__bounds.serverid ~= serverid and not isCacheStale
-						local isOwnerNotSameAsCache = data.__bounds and data.__bounds.id and data.__bounds.id ~= id
+						local isServerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.serverid and clonedRecord.__bounds.serverid ~= ServerId and clonedRecord.__bounds.serverid ~= serverid and not isCacheStale
+						local isOwnerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.id and clonedRecord.__bounds.id ~= thisOwnerId and clonedRecord.__bounds.id ~= id
 						
 						if isServerNotSameAsCache or isOwnerNotSameAsCache then
 							return nil
@@ -1595,10 +1760,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 						end
 					end
 					
-					CurrentData = CurrentData or deepclone(data) or deepclone(meta._CompressedBlueprint)
+					CurrentData = CurrentData or clonedRecord or deepclone(meta._CompressedBlueprint)
 					
-					if data.__version and data.__version > (CurrentData.__vision or 0) then
-						CurrentData = deepclone(data)
+					if clonedRecord.__version and CurrentData and clonedRecord.__version > (CurrentData.__vision or 0) then
+						CurrentData = clonedRecord
 					end
 					
 					CurrentData.__data = compressed
@@ -1615,7 +1780,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			if walSuccess and result then
 				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
 			end
-
+			
 			if meta._SavePendingQueue[record.Key] then
 				meta._SavePendingQueue[record.Key] = nil
 			end
@@ -1715,7 +1880,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._UnreadyData = {} -- { [Key: string] = true }
 	self._DataCache = {} -- { [Key: string] = Data: any }
 	self._CompressionStack = {} -- { [Key: string] = {Record: UDCRecord, Tick: number} }
-	self._StandbyRegistry = {}
+	self._StandbyRegistry = {} -- { [Key: string] = Record: UDCRecord }
 	self._LockSessions = ScopedMutex.new(Mutex)
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
 
@@ -1726,6 +1891,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._IsObtainingRunning = false
 	self._IsCompressionTimerRunning = false
 	self._CacheCleaningCalled = false
+	self._StandbyReady = false
 	
 	self._CurrentLoadWorkers = 0
 	self._CurrentSaveWorkers = 0
