@@ -728,6 +728,7 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 
 				CurrentData.__data = compressed
 				CurrentData.__flag = flag
+				CurrentData.__bounds.since = now
 
 				return CurrentData
 			end)
@@ -1748,6 +1749,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					end
 					
 					CurrentData.__data = compressed
+					CurrentData.__bounds.since = now
 					return CurrentData
 				end)
 			end)
