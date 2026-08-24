@@ -45,7 +45,7 @@ D. Multi Server testing (CRUCIAL)
 
 
 -- UDataComponent.lua
--- UDataComponent-v2.0
+-- UDataComponent-v2.0 (UDC)
 
 -- I decided to refactor, but also created a new one
 -- I probably still stealing some features from the previous version into here
@@ -315,6 +315,12 @@ export type UDCRecord = {
 	-- @param Data: any -- Data to commit
 	-- @param SegmentIndex: number? -- Where the current data is contained in an index to
 	-- @return boolean -- Status of the saving data, true if success
+	
+	Enter: (UDCRecord: UDCRecord, Password: string) -> boolean, -- (Suspending) that tries to enter into the record with password of record that tried be entered with
+	-- This will steal the data from the previous owner, and will be locked for current server session.
+	-- @important -- When you use this function to steal the record ownership, make sure you're also release the session after used the record. So, the original owner can use its record back
+	-- @param Password: string -- Password for stealer record to enter into the desired record, the password is held by original owner
+	-- @return boolean -- Status of the entering the record, true if success
 
 	ForceWrite: (UDCRecord: UDCRecord, WritingFunction: (CurrentData: any) -> ()) -> boolean, -- (Suspending) same as record:Write(...), but this will commit into datastore immediately
 	-- @param WritingFunction: (CurrentData: any) -> () -- Function that used as Write session over the data
@@ -1141,10 +1147,19 @@ end
 
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
 	if meta._ActiveRecords[key] then
-		return meta._ActiveRecords[key]
+		return meta._ActiveRecords[key] -- when current record already activated, returns that active record
 	end
-	
-	local record = {}
+
+	-- Some of dangerous record's members that need wise and careful uses, are:
+	-- Force* members: This would cause a datastore request "boom" when called this many times, but thankfully this could be prevented by _SaveProgress session that unallowed you to do duplicate calls
+	-- Enter(): This would cause a data-loss or dead session, because this is stealing the ownership of current record to another owner. Calling this without Sleep() control or automatic Standby() semantics, would cause data-loss and dead session
+	--			Dead Session is where the original owner cannot obtain its own record, meanwhile the stealer owner remains.
+	-- Detach(): This is where you can delete your record. Remember to use this wisely, because the current record can be wiped. Thankfully there are safety-nets, StrictlyUnallowDetaching config and Archivation (if enabled)
+	-- Save(): This is where you can save the custom data or current record.Data modification, but UDC doesn't validate the data before commiting.
+	-- 			However, Ready() already have a role to validate the data too before state sets to "Ready", but you can't obtain the data if even one of the data invalid.
+	--			For save, automatic, and guaranteed data modification, use Write() instead. Write() validates the data, before commiting.
+				
+	local record = {} -- Player's Record level
 	record.Key = key -- This is the key of the record
 	record.Owner = owner -- This is the owner of the record
 	record.IsArchived = false -- This is to indicate if the record is archived or not
@@ -1488,6 +1503,14 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		return false
+	end
+	
+	-- Trying to steal or enter into this record by another owner
+	-- Password makes sure that the stealer owner is actually trying to have current record from the current owner
+	-- IMPORANT: This function will not work if the record is not ready, also this function would cause you a DEAD SESSION if not released with Sleep() or automatic trigger by Standby() after use the record
+	-- Original owner will lost its record if the record have been successfully entered/stolen by another owner
+	function record:Enter(Password: string) -- COMING SOON
+		
 	end
 	
 	-- Reluctantly saving current data from the modification of .Data from record, but you can use another data to save
