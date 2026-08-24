@@ -1,5 +1,5 @@
 --[[
-CURRENT BATTLE TEST RESULTS (First Version):
+BATTLE TEST RESULTS:
 
 A. Core Testing
 1. Data is loaded correctly
@@ -28,9 +28,16 @@ B. Reconciliation Testing
 Result of Reconciliation Testing: SUCCESS
 
 C. Exclusive Access (Single Server)
-COMING SOON... TOMORROW
+1. Awake() for the first time, when first player successfully awakened, other players will not be able to awake and kicked, meanwhile if they're rejoining it will be able to awake (FIXED)
+2. When trying to Ready() with another owner of record who not belonged this data, it will failed successfully
+3. When tries to Awake() twice or more before Sleep() called, it will return false
+4. __bounds info in record successfully captured after Awake()
+
+Result of Exclusive Access (Single Server) Testing: PARTIALLY SUCCESS, No.1 failed
+New Result: FIXED, SUCCESS
 
 --]]
+
 
 -- UDataComponent.lua
 -- UDataComponent-v2.0
@@ -187,7 +194,7 @@ export type __UDCInfo_Internal = {
 	_CurrentWALDataStore : DataStore,
 	_CurrentArchivedDataStore : DataStore,
 	
-	_CompressedBlueprint : buffer,
+	_CompressedBlueprint : { any },
 
 	_SaveTimestamp : { any? },
 	_SwapTimestamp : { any? },
@@ -511,7 +518,7 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 			end
 			
 			-- If the data is not exist, or the data is exist but the server is dead/stale, use the WAL entry, or the compressed blueprint
-			CurrentData = CurrentData or entry or meta._CompressedBlueprint
+			CurrentData = CurrentData or entry or deepclone(meta._CompressedBlueprint)
 			
 			-- Checking WAL entry if exist and has a newer version than the current data
 			if entry and entry.__version and entry.__version > (CurrentData.__version or 0) then
@@ -621,7 +628,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 					end
 				end
 								
-				CurrentData = CurrentData or commitedData or meta._CompressedBlueprint
+				CurrentData = CurrentData or commitedData or deepclone(meta._CompressedBlueprint)
 
 				if commitedData.__version and commitedData.__version > (CurrentData and CurrentData.__version or 0) then
 					CurrentData = commitedData
@@ -674,7 +681,7 @@ local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
 					end
 				end
 				
-				CurrentData = CurrentData or backupData or meta._CompressedBlueprint
+				CurrentData = CurrentData or backupData or deepclone(meta._CompressedBlueprint)
 
 				if backupData and backupData.__version and backupData.__version > (CurrentData and CurrentData.__version or 0) then
 					CurrentData = backupData
@@ -1051,19 +1058,27 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		if not UDataComponent.IsAlive() then
 			return false
 		end
+		
+		print("1")
 				
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
 		end
+		
+		print("2")
 				
 		-- Whether the data is already waking up or not, if not, maybe cannot ready or already running
 		if record.CurrentState ~= "WakingUp" then
 			return false
 		end
+		
+		print("3")
 				
 		if record._ReadyProgress then
 			return false
 		end
+		
+		print("4")
 				
 		record._ReadyProgress = true
 		
@@ -1071,6 +1086,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record.CurrentState = "Sleeping"
 			return false
 		end
+		
+		print("5")	
 		
 		local now = workspace:GetServerTimeNow()
 		local unready = meta._UnreadyData[record.Key]
@@ -1081,41 +1098,55 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record.CurrentState = "Sleeping"
 			return false
 		end		
+		
+		print("6")	
 
 		if meta._ActiveRecords[record.Key] then
 			penalty()
 			return false
 		end
+		
+		print("7")	
 				
 		-- Checking if the was archived or not
 		if record.IsArchived then
 			penalty()
 			return false
 		end
+		
+		print("8")	
 				
 		-- Checking if essential elements of data are existing
 		if not unready.__version or not unready.__bounds or not unready.__data or not unready.__flag then
 			penalty()
 			return false
 		end
+		
+		print("9")	
 				
 		-- Checking if bound elements in the data are existed
 		if not unready.__bounds or not unready.__bounds.id or not unready.__bounds.since or not unready.__bounds.serverid then
 			penalty()
 			return false
 		end
+		
+		print("10")	
 				
 		-- Checking if the data is owned by this server
 		if unready.__bounds.serverid ~= ServerId then
 			penalty()
 			return false
 		end
+		
+		print("11")	
 				
 		-- Checking if the data is owned by this player
 		if record.Owner and record.Owner.UserId ~= unready.__bounds.id then
 			penalty()
 			return false
 		end
+		
+		print("12")	
 				
 		-- Checking if the data is still bound to this player
 		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
@@ -1123,6 +1154,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
+		
+		print("13")	
 				
 		-- Checking if player is still in the server
 		local playerFound = false
@@ -1138,6 +1171,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				task.wait(1)
 			end
 		end
+		
+		print("14")	
 				
 		local compressedData = unready.__data
 		local flagData = unready.__flag -- 'C' means compressed, 'R' means raw/real
@@ -1152,18 +1187,24 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
+		
+		print("15")	
 				
 		-- Checking if the data is a table
 		if typeof(data) ~= "table" then
 			penalty()
 			return false
 		end
+		
+		print("16")	
 				
 		-- Checking if the data size is not too big
 		if Compressor.GetSize(data) > meta.MaxDecompressedSize then
 			penalty()
 			return false
 		end
+		
+		print("17")	
 				
 		-- Reconcilate the data with the blueprint, to prevent data corruption or data loss
 		reconcile(data, meta.DataBlueprint)
@@ -1173,6 +1214,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
+		
+		print("18")	
 				
 		-- Clamping all values with the validations, if the element was a number type
 		clamp_values(meta, record, data)
@@ -1182,6 +1225,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
+		
+		print("19")	
 				
 		-- Apply the data to the cache
 		record.Data = data -- Data is now ready to be used
