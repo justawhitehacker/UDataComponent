@@ -45,7 +45,7 @@ D. Multi Server testing (CRUCIAL)
 
 
 -- UDataComponent.lua
--- UDataComponent-v2.0 (UDC)
+-- UDataComponent-v2.0
 
 -- I decided to refactor, but also created a new one
 -- I probably still stealing some features from the previous version into here
@@ -63,7 +63,7 @@ local Compressor = require(script.Compressor)
 local Mutex = require(script.Mutex)
 local ScopedMutex = require(script.ScopedMutex)
 
-local ServerId = game.JobId
+local ServerId = _G.__UDC_MOCK_SERVERID or game.JobId
 local PlaceId = game.PlaceId
 
 local ConnectionTest = DataStoreService:GetDataStore("ConnectionTest-" .. PlaceId)
@@ -746,14 +746,14 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 	local result = success and result
 	
 	if result and not meta._ShutdownCalled then
-		local isForcedSaveSuccess = pcall(record.ForceSave, record)
-		local pendingSave = meta._SavePendingQueue[record.Key]
-		
-		if pendingSave then
-			meta._SavePendingQueue[record.Key] = nil
+		local isForcedSaveSuccess, saveResult = pcall(record.ForceSave, record)
+		for _, pending in pairs(meta._SavePendingQueue) do
+			if pending.Key == record.Key then
+				table.remove(meta._SavePendingQueue, table.find(meta._SavePendingQueue, pending))
+			end
 		end
 		
-		if isForcedSaveSuccess then
+		if isForcedSaveSuccess and saveResult then
 			pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
 		end
 	end
@@ -841,6 +841,7 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 
 			if first.Meta and first.Meta.Owner and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
 				task.spawn(first.Thread, false, nil) -- Player left, cancel the load request
+				print("Error")
 				continue
 			end
 
@@ -928,7 +929,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 		local now = workspace:GetServerTimeNow()
 		
 		for key, record in pairs(meta._StandbyRegistry) do
-			local isPending = meta._SavePendingQueue[key]
+			local isPending = meta._SavePendingQueue
 			local sameOwner = record.Owner and record.Owner.UserId == userId
 			
 			if sameOwner then
@@ -1147,19 +1148,10 @@ end
 
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
 	if meta._ActiveRecords[key] then
-		return meta._ActiveRecords[key] -- when current record already activated, returns that active record
+		return meta._ActiveRecords[key]
 	end
-
-	-- Some of dangerous record's members that need wise and careful uses, are:
-	-- Force* members: This would cause a datastore request "boom" when called this many times, but thankfully this could be prevented by _SaveProgress session that unallowed you to do duplicate calls
-	-- Enter(): This would cause a data-loss or dead session, because this is stealing the ownership of current record to another owner. Calling this without Sleep() control or automatic Standby() semantics, would cause data-loss and dead session
-	--			Dead Session is where the original owner cannot obtain its own record, meanwhile the stealer owner remains.
-	-- Detach(): This is where you can delete your record. Remember to use this wisely, because the current record can be wiped. Thankfully there are safety-nets, StrictlyUnallowDetaching config and Archivation (if enabled)
-	-- Save(): This is where you can save the custom data or current record.Data modification, but UDC doesn't validate the data before commiting.
-	-- 			However, Ready() already have a role to validate the data too before state sets to "Ready", but you can't obtain the data if even one of the data invalid.
-	--			For save, automatic, and guaranteed data modification, use Write() instead. Write() validates the data, before commiting.
-				
-	local record = {} -- Player's Record level
+	
+	local record = {}
 	record.Key = key -- This is the key of the record
 	record.Owner = owner -- This is the owner of the record
 	record.IsArchived = false -- This is to indicate if the record is archived or not
@@ -1212,15 +1204,18 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		if success and not result then
 			record.CurrentState = "Sleeping"
 			meta._UnreadyData[record.Key] = nil
+			
 			return false
 		elseif success and result then
 			record.CurrentState = "WakingUp"
 			meta._UnreadyData[record.Key] = result
+			
 			return true
 		end
 		
 		record.CurrentState = "Sleeping"
 		meta._UnreadyData[record.Key] = nil
+		
 		return false
 	end
 	
@@ -1476,7 +1471,6 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					if isSameServer and isSameOwner then
 						CurrentData.__bounds.serverid = nil
 						CurrentData.__bounds.lastheartbeat = nil
-						CurrentData.__bounds.id = nil
 						CurrentData.__bounds.since = now
 					end
 					
@@ -1588,7 +1582,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		local now = workspace:GetServerTimeNow()
-		if meta._WriteTimestamp[record.Key] and now - meta._WriteTimestamp[record.Key] > meta.DataWritingCooldown then
+		if meta._WriteTimestamp[record.Key] and now - meta._WriteTimestamp[record.Key] < meta.DataWritingCooldown then
 			return false
 		end
 		
@@ -1763,8 +1757,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 						
 						local isStale = now - lastheartbeat > meta.StaleServerClaimingTime
 						
-						local isDifferentServer = serverid ~= ServerId and not isStale
-						local isDifferentOwner = id ~= thisOwnerId
+						local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+						local isDifferentOwner = id and id ~= thisOwnerId
 						
 						local isCacheStale = now - (clonedRecord.__bounds and clonedRecord.__bounds.since or 0) > meta.StaleServerClaimingTime
 
@@ -1787,6 +1781,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					end
 					
 					CurrentData.__data = compressed
+					CurrentData.__bounds.lastheartbeat = now
 					CurrentData.__bounds.since = now
 					return CurrentData
 				end)
@@ -1802,8 +1797,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
 			end
 			
-			if meta._SavePendingQueue[record.Key] then
-				meta._SavePendingQueue[record.Key] = nil
+			for _, pending in pairs(meta._SavePendingQueue) do
+				if pending.Key == record.Key then
+					table.remove(meta._SavePendingQueue, table.find(meta._SavePendingQueue, pending))
+					break
+				end
 			end
 		end
 		record._SaveProgress = false
@@ -1941,6 +1939,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					end
 
 					CurrentData.__data = compressed
+					CurrentData.__bounds.lastheartbeat = now
 					CurrentData.__bounds.since = now
 					return CurrentData
 				end)
@@ -1956,8 +1955,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
 			end
 
-			if meta._SavePendingQueue[record.Key] then
-				meta._SavePendingQueue[record.Key] = nil
+			for _, pending in pairs(meta._SavePendingQueue) do
+				if pending.Key == record.Key then
+					table.remove(meta._SavePendingQueue, table.find(meta._SavePendingQueue, pending))
+				end
 			end
 		end
 		record._SaveProgress = false
