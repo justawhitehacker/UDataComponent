@@ -458,6 +458,15 @@ export type UDCEventConnector = {
 	
 }
 
+-- finding the index of standby registry
+local function find_standby_index(meta : __UDCInfo_Internal, key)
+	for i, v in ipairs(meta._StandbyRegistry) do
+		if v.Key == key then
+			return i
+		end
+	end
+end
+
 -- automatic compression, by checking if there is an overhead if compressed or not
 local function compare_and_compress(meta : __UDCInfo_Internal, data : { any? })
 	local buff, flag = Compressor.TryToCompress(data, meta.CompressionLevel, meta.CompressionThreshold)
@@ -804,7 +813,7 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 					local isOwnerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.id and clonedRecord.__bounds.id ~= id and clonedRecord.__bounds.id ~= thisOwnerId
 
 					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
-					local isDifferentOwner = id and id ~= thisOwnerId and not isStale
+					local isDifferentOwner = id and id ~= thisOwnerId
 
 					if isServerNotSameAsCache or isOwnerNotSameAsCache then
 						return nil
@@ -837,10 +846,17 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 	
 	if result and not meta._ShutdownCalled then
 		local isForcedSaveSuccess, saveResult = pcall(record.ForceSave, record)
-		for _, pending in pairs(meta._SavePendingQueue) do
-			if pending.Key == record.Key then
-				table.remove(meta._SavePendingQueue, table.find(meta._SavePendingQueue, pending))
+		
+		local index = 0
+		for i, pending in ipairs(meta._SavePendingQueue) do
+			if pending.Meta and pending.Meta.Key == record.Key then
+				index = i
+				break
 			end
+		end
+		
+		if index then
+			table.remove(meta._SavePendingQueue, index)
 		end
 		
 		if isForcedSaveSuccess and saveResult then
@@ -919,7 +935,7 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 		local obtain = meta._ObtainPendingQueue
 		local perTick = meta.MaxDataObtainingPerTick
 
-		while #obtain > 0 and meta._CurrentLoadWorkers <= meta.MaxConcurrentLoadWorkers do
+		while #obtain > 0 and meta._CurrentLoadWorkers < meta.MaxConcurrentLoadWorkers do
 			local first = table.remove(obtain, 1)
 
 			local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
@@ -1115,7 +1131,7 @@ end
 local function add_standby_record(meta : __UDCInfo_Internal, record : UDCRecord)
 	set_standby_place(meta)
 	
-	local find = table.find(meta._StandbyRegistry, record.Key)
+	local find = find_standby_index(meta, record.Key)
 	if not find then
 		table.insert(meta._StandbyRegistry, { Record = record, Key = record.Key })
 		return true
@@ -1265,6 +1281,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.Data = nil -- This is the data of the record
 	record.CurrentState = "Asleep"
 	
+	record._AwakeProgress = false -- This is to indicate if the record's awake in progress
 	record._ReadyProgress = false -- This is to indicate if the record's ready in progress
 	record._SleepProgress = false -- This is to indicate if the record's sleep in progress
 	record._SaveProgress = false -- This is to indicate if the record's save in progress, where Save and Write shares this variable	
@@ -1302,28 +1319,32 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		if meta._AwakeProgress then
+			return false
+		end
+		
 		if record.CurrentState ~= "Asleep" and record.CurrentState ~= "Sleeping" then
 			return false
 		end
+		meta._AwakeProgress = true
 		
 		local success, result = enqueue_load(meta, record)
+		local result = false
 		
-		if success and not result then
-			record.CurrentState = "Sleeping"
-			meta._UnreadyData[record.Key] = nil
-			
-			return false
-		elseif success and result then
+		if success and result then
 			record.CurrentState = "WakingUp"
 			meta._UnreadyData[record.Key] = result
 			
-			return true
+			result = true
+		else
+			record.CurrentState = "Sleeping"
+			meta._UnreadyData[record.Key] = nil
+			
+			result = false
 		end
+		meta._AwakeProgress = false
 		
-		record.CurrentState = "Sleeping"
-		meta._UnreadyData[record.Key] = nil
-		
-		return false
+		return result
 	end
 	
 	-- After the data record is awake, we need to make the data is actually ready to be used
@@ -1599,7 +1620,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			meta._DataCache[record.Key] = nil
 			meta._ActiveRecords[record.Key] = nil
 			
-			local find = table.find(meta._StandbyRegistry, record.Key)
+			local find = find_standby_index(meta, record.Key)
 			if find then
 				table.remove(meta._StandbyRegistry, find)
 			end
@@ -1918,11 +1939,16 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
 			end
 			
-			for _, pending in pairs(meta._SavePendingQueue) do
-				if pending.Key == record.Key then
-					table.remove(meta._SavePendingQueue, table.find(meta._SavePendingQueue, pending))
+			local index = 0
+			for i, pending in ipairs(meta._SavePendingQueue) do
+				if pending.Meta and pending.Meta.Key == record.Key then
+					index = i
 					break
 				end
+			end
+			
+			if index then
+				table.remove(meta._SavePendingQueue, index)
 			end
 		end
 		record._SaveProgress = false
@@ -2069,11 +2095,17 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			if walSuccess and result then
 				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
 			end
-
-			for _, pending in pairs(meta._SavePendingQueue) do
-				if pending.Key == record.Key then
-					table.remove(meta._SavePendingQueue, table.find(meta._SavePendingQueue, pending))
+			
+			local index = 0
+			for i, pending in ipairs(meta._SavePendingQueue) do
+				if pending.Meta and pending.Meta.Key == record.Key then
+					index = i
+					break
 				end
+			end
+			
+			if index then
+				table.remove(meta._SavePendingQueue, index)
 			end
 		end
 		record._SaveProgress = false
