@@ -761,7 +761,15 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 		end)
 	end)
 	
-	return success and result
+	local result = success and result
+	if result then
+		local dirtySave = meta._DirtySave[record.Key]
+		if dirtySave then
+			meta._DirtySave[record.Key] = nil
+		end
+	end
+	
+	return result
 end
 
 local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord, now : number)
@@ -1037,7 +1045,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 		for i, info in ipairs(meta._StandbyRegistry) do
 			local sameOwner = info.Record and info.Record.Owner and info.Record.Owner.UserId == userId
 			
-			if sameOwner then
+			if sameOwner and meta._DirtySave[info.Key] then
 				write_to_wal_or_fs(meta, info.Record, now)
 				pcall(info.Record.Sleep, info.Record)
 				
@@ -1702,6 +1710,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end		
 			
 			record.Data = deepclone(data.__data)
+			meta._DirtySave[record.Key] = true
 		end)
 		push_compression_timer(meta, record)
 		
@@ -1779,6 +1788,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 
 			data.__data = customData
 			record.Data = deepclone(customData)
+			
+			meta._DirtySave[record.Key] = true
 		end)
 		
 		if not success then
@@ -1951,6 +1962,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			if index then
 				table.remove(meta._SavePendingQueue, index)
 			end
+			
+			local dirty = meta._DirtySave[record.Key]
+			if dirty then
+				meta._DirtySave[record.Key] = nil
+			end
 		end
 		record._SaveProgress = false
 
@@ -2107,6 +2123,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			
 			if index then
 				table.remove(meta._SavePendingQueue, index)
+			end
+			
+			local dirty = meta._DirtySave[record.Key]
+			if dirty then
+				meta._DirtySave[record.Key] = nil
 			end
 		end
 		record._SaveProgress = false
