@@ -72,7 +72,20 @@ E. WAL Testing
 	
 Result of WAL Testing: SUCCESS
 
+F. Compression Testing
+1. When the data is small, and overhead detected, it just applied the raw/real buffer data into the data of record
+2. Otherwise, when the data is big/so big, and no overhead detected, it will be compressed and applied into the data of record
+3. Consistent flag that indicates the compression of data type, 'C' means compressed, 'R' means real/uncompressed/raw
+4. Consistent decompressing by check the flag of record when preparing, if 'C' will be decompressed, 'R' will be applied to record explicitly
+5. 
 
+G. Concurrency Testing
+1. Burst Awake() after joined within 20 calls, didn't crash and budget is saved as much as possible
+2. Burst Awake() within 15 calls with max load concurrent worker within 3 workers, handled the load data gracefully and maximally 3 or less workers of each working
+3. Grace operations of datastore budget, when trying to load the record, without create too much requests to the datastore
+4. When the player is leaving meanwhile the record processing to save the data, it won't commit into datastore
+5. Calling 100 records, with just save concurrent workers as much as 10. Can commit all records into datastore without any overlaps each keys
+6. 
 
 --]]
 
@@ -349,11 +362,23 @@ export type UDCRecord = {
 	-- @param SegmentIndex: number? -- Where the current data is contained in an index to
 	-- @return boolean -- Status of the saving data, true if success
 	
-	Enter: (UDCRecord: UDCRecord, Password: string) -> boolean, -- (Suspending) that tries to enter into the record with password of record that tried be entered with
+	COMINGSOON_Enter: (UDCRecord: UDCRecord, Password: string) -> boolean, -- (Suspending) that tries to enter into the record with password of record that tried be entered with
 	-- This will steal the data from the previous owner, and will be locked for current server session.
 	-- @important -- When you use this function to steal the record ownership, make sure you're also release the session after used the record. So, the original owner can use its record back
 	-- @param Password: string -- Password for stealer record to enter into the desired record, the password is held by original owner
 	-- @return boolean -- Status of the entering the record, true if success
+	
+	COMINGSOON_GenerateLogin: (UDCRecord: UDCRecord, ThisRecordPassword: string) -> boolean, -- (Suspending) makes a password for this record, where "stealer" server needs to input this password before could enter into the record by another server session
+	-- GenerateLogin also acts as "this record can be stolen" or "open source" to another server or another record, without generating login with this. Current Record guaranteed to be safe from session stealing
+	-- @important -- Generating login would cause this record to be corrupted when some servers that tried to steal session of this record, use this carefully and always to release the data after steal the ownership 
+	-- @param ThisRecordPassword: string -- Key or password for this record to be stolen with
+	-- @return boolean -- Status if the record is successfully generated the login and allowed to be stolen
+	
+	COMINGSOON_DestroyLogin: (UDCRecord: UDCRecord, Password: string) -> boolean, -- (Suspending) destroy the password and login session of this record, so other servers can't enter or steal this record
+	-- @important -- When you tried to destroy the login session of this record, meanwhile the stealer was from another server, you can't do it, you can only destroy the login session by original server
+	-- @important -- You can only release the record from original server, not server that stole the record
+	-- @param Password: string -- Safety key before destroying the login session of this record
+	-- @return boolean -- Status of the destroying the login session, true if success
 
 	ForceWrite: (UDCRecord: UDCRecord, WritingFunction: (CurrentData: any) -> ()) -> boolean, -- (Suspending) same as record:Write(...), but this will commit into datastore immediately
 	-- @param WritingFunction: (CurrentData: any) -> () -- Function that used as Write session over the data
@@ -684,6 +709,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	
 	local status = success and result
 	if status then
+		print("Commited for " .. record.Key)
 		local standbyRegistry = meta._StandbyRegistry[record.Key]
 		if standbyRegistry then
 			standbyRegistry.Dirty = false
@@ -862,7 +888,7 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 		local obtain = meta._ObtainPendingQueue
 		local perTick = meta.MaxDataObtainingPerTick
 
-		while #obtain > 0 and meta._CurrentLoadWorkers < meta.MaxConcurrentLoadWorkers do
+		while #obtain > 0 and meta._CurrentLoadWorkers <= meta.MaxConcurrentLoadWorkers do
 			local first = table.remove(obtain, 1)
 
 			local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
@@ -874,7 +900,6 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 
 			if first.Meta and first.Meta.Owner and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
 				task.spawn(first.Thread, false, nil) -- Player left, cancel the load request
-				print("Error")
 				continue
 			end
 
@@ -912,7 +937,7 @@ local function run_save_queue(meta : __UDCInfo_Internal)
 				break -- No budget left, stops current save request until next frame
 			end
 			
-			if first.Meta and first.Meta.Key and not meta._DataCache[first.Meta.Key] then
+			if first.Meta and first.Meta.Owner and first.Meta.Key and not meta._DataCache[first.Meta.Key] and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
 				task.spawn(first.Thread, false) -- Data is already unloaded, cancel the save request
 				continue
 			end
@@ -943,7 +968,7 @@ local function run_compression_timer(meta : __UDCInfo_Internal)
 					if success then
 						timer.Record._LastCompressedData = compressed
 						timer.Record._LastFlagData = flag
-						
+												
 						timer.Dirty = false
 						timer.Tick = now
 					end
@@ -1228,6 +1253,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- In Awake, also checks if this server owns the data, it will check if current owner was this player
 	-- SUSPENDING (YIELDABLE), where Awake waits for dequeue session until the data is loaded
 	function record:Awake()
+		if meta._UnreadyData[record.Key] then
+			return false
+		end
+		
 		if record.CurrentState ~= "Asleep" and record.CurrentState ~= "Sleeping" then
 			return false
 		end
@@ -1536,7 +1565,15 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- Password makes sure that the stealer owner is actually trying to have current record from the current owner
 	-- IMPORANT: This function will not work if the record is not ready, also this function would cause you a DEAD SESSION if not released with Sleep() or automatic trigger by Standby() after use the record
 	-- Original owner will lost its record if the record have been successfully entered/stolen by another owner
-	function record:Enter(Password: string) -- COMING SOON
+	function record:COMINGSOON_Enter(Password: string) -- COMING SOON
+		
+	end
+	
+	function record:COMINGSOON_GenerateLogin(ThisRecordPassword: string) -- COMING SOON
+		
+	end
+	
+	function record:COMINGSOON_DestroyLogin(Password: string) -- COMING SOON
 		
 	end
 	
@@ -1554,8 +1591,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		if record._SaveProgress then
-			return false
+		while record._SaveProgress do
+			task.wait()
 		end
 		record._SaveProgress = true
 				
@@ -1619,8 +1656,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		if record._SaveProgress then
-			return false
+		while record._SaveProgress do
+			task.wait()
 		end
 		record._SaveProgress = true
 		
@@ -1645,36 +1682,38 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		local customData = deepclone(data.__data) -- use deep-cloned table, so that the main data can't be changed, to prevent some "malicious" or "accident" data modifications
 		local success
 		meta._LockSessions:Do(record.Key, function()
+			local customData = deepclone(data.__data) -- use deep-cloned table, so that the main data can't be changed, to prevent some "malicious" or "accident" data modifications
 			success = pcall(WritingFunction, customData) -- this function returns nothing, but change the data safely
+			
+			if not success then
+				return
+			end
+
+			-- schema validations, when data types are valid
+			if not are_schemas_valid(meta, record, customData) then
+				success = false
+				return
+			end
+
+			-- clamp values that is a number
+			clamp_values(meta, record, customData)
+
+			-- predicate validations, this is where your data "must operate in this case"
+			if not are_datas_valid(meta, record, customData) then
+				success = false
+				return
+			end
+
+			data.__data = customData
+			record.Data = deepclone(customData)
 		end)
 		
 		if not success then
 			record._SaveProgress = false
 			return false
 		end
-		
-		-- schema validations, when data types are valid
-		if not are_schemas_valid(meta, record, customData) then
-			record._SaveProgress = false
-			return false
-		end
-		
-		-- clamp values that is a number
-		clamp_values(meta, record, customData)
-		
-		-- predicate validations, this is where your data "must operate in this case"
-		if not are_datas_valid(meta, record, customData) then
-			record._SaveProgress = false
-			return false
-		end
-		
-		meta._LockSessions:Do(record.Key, function()
-			data.__data = customData
-			record.Data = deepclone(customData)
-		end)
 		
 		push_compression_timer(meta, record)
 		
@@ -1699,8 +1738,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		local now = workspace:GetServerTimeNow()
-		if record._SaveProgress then
-			return false
+		while record._SaveProgress do
+			task.wait()
 		end
 		record._SaveProgress = true
 
@@ -1852,8 +1891,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		if record._SaveProgress then
-			return false
+		while record._SaveProgress do
+			task.wait()
 		end
 		record._SaveProgress = true
 		
@@ -1873,33 +1912,27 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		local clonedRecord = deepclone(data)
-		local clonedData = deepclone(clonedRecord.__data)
-		local success
-		meta._LockSessions:Do(record.Key, function()
-			success = pcall(WritingFunction, clonedData)
-		end)
-		
-		if not success then
-			record._SaveProgress = false
-			return false
-		end
-		
-		if not are_schemas_valid(meta, record, clonedData) then
-			record._SaveProgress = false
-			return false
-		end
-		
-		clamp_values(meta, record, clonedData)
-		
-		if not are_datas_valid(meta, record, clonedData) then
-			record._SaveProgress = false
-			return false
-		end
-		
 		local thisOwnerId = record.Owner and record.Owner.UserId or 0
 		local isSuccess = false
 		meta._LockSessions:Do(record.Key, function()
+			local clonedRecord = deepclone(data)
+			local clonedData = deepclone(clonedRecord.__data)
+			local success = pcall(WritingFunction, clonedData)
+
+			if not success then
+				return false
+			end
+
+			if not are_schemas_valid(meta, record, clonedData) then
+				return false
+			end
+
+			clamp_values(meta, record, clonedData)
+
+			if not are_datas_valid(meta, record, clonedData) then
+				return false
+			end
+			
 			data.__data = clonedData
 			record.Data = deepclone(clonedData)
 			
