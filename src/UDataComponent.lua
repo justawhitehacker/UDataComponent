@@ -257,6 +257,7 @@ export type UDCInfo = {
 	MaxDataObtainingPerTick : number, -- Maximum data obtaining per tick in FIFO queue,
 	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
 	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
+	MaxStandbyWorkers : number, -- Maximum concurrent workers in standby when trying to commit data when shutdown
 	StaleServerClaimingTime : number, -- Duration for the server to claim the data of other server
 	ShutdownSecondsToken : number, -- Duration for the shutdown seconds remaining to prevent data loss
 }
@@ -354,6 +355,7 @@ export type __UDCInfo_Internal = {
 	MaxDataObtainingPerTick : number, -- Maximum data obtaining per tick in FIFO queue,
 	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
 	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
+	MaxStandbyWorkers : number, -- Maximum concurrent workers in standby when trying to commit data when shutdown
 	StaleServerClaimingTime : number, -- Duration for the server to claim the data if the owner is unknown
 	ShutdownSecondsToken : number, -- Duration for the shutdown seconds token, where the server will not save the data after this duration
 }
@@ -749,23 +751,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 		end)
 	end)
 	
-	local status = success and result
-	if status then
-		print("Commited for " .. record.Key)
-		local standbyRegistry = meta._StandbyRegistry[record.Key]
-		if standbyRegistry then
-			standbyRegistry.Dirty = false
-		end
-	end
-	
-	return status
-end
-
-local function standby_release(meta : __UDCInfo_Internal, record : UDCRecord)
-	local sleep = record:Sleep()
-	if sleep then
-		meta._StandbyRegistry[record.Key] = nil
-	end
+	return success and result
 end
 
 local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord, now : number)
@@ -837,7 +823,10 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 
 				CurrentData.__data = compressed
 				CurrentData.__flag = flag
-				CurrentData.__bounds.since = now
+				CurrentData.__bounds = {
+					id = thisOwnerId,
+					since = now
+				}
 
 				return CurrentData
 			end)
@@ -1028,13 +1017,13 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 		local userId = Player.UserId
 		local now = workspace:GetServerTimeNow()
 		
-		for key, record in pairs(meta._StandbyRegistry) do
-			local isPending = meta._SavePendingQueue
-			local sameOwner = record.Owner and record.Owner.UserId == userId
+		for i, info in ipairs(meta._StandbyRegistry) do
+			local sameOwner = info.Record and info.Record.Owner and info.Record.Owner.UserId == userId
 			
 			if sameOwner then
-				write_to_wal_or_fs(meta, record, now)
-				standby_release(meta, record)
+				write_to_wal_or_fs(meta, info.Record, now)
+				table.remove(meta._StandbyRegistry, i)
+				
 				break
 			end
 		end
@@ -1044,26 +1033,39 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 		meta._ShutdownCalled = true
 		
 		local workerThreads = {}
-		local working = { count = 0 }
+		local working = { Workers = 0, Saved = 0 }
 		
 		local now = workspace:GetServerTimeNow()
+		local stopped = false
 		
-		for key, record in pairs(meta._StandbyRegistry) do
-			table.insert(workerThreads, task.spawn(function(working)
-				write_to_wal_or_fs(meta, record, now)
-				standby_release(meta, record)
-				
-				working.count -= 1
-			end, working))
+		while #meta._StandbyRegistry > 0 do
+			local updateBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
 			
-			working.count += 1
+			local workers = working.Workers
+			
+			while workers <= meta.MaxStandbyWorkers do
+				local item = table.remove(meta._StandbyRegistry, 1)
+				
+				if not item.Record or not item.Key and meta._DataCache[item.Key] then
+					continue
+				end
+				
+				if updateBudget < 1 then
+					break
+				end
+				
+				working.Workers += 1
+				table.insert(workerThreads, task.spawn(function()
+					write_to_wal_or_fs(meta, item.Record, now)
+					working.Workers -= 1
+					working.Saved += 1
+				end))
+			end
+			
+			task.wait(0.5)
 		end
 		
-		local seconds = 0
-		while #workerThreads > 0 and working.count > 0 and seconds < meta.ShutdownSecondsToken do
-			seconds += 1
-			task.wait(1)
-		end
+		print(working.Saved)
 	end)
 end
 
@@ -1114,8 +1116,9 @@ end
 local function add_standby_record(meta : __UDCInfo_Internal, record : UDCRecord)
 	set_standby_place(meta)
 	
-	if not meta._StandbyRegistry[record.Key] then
-		meta._StandbyRegistry[record.Key] = record
+	local find = table.find(meta._StandbyRegistry, record.Key)
+	if not find then
+		table.insert(meta._StandbyRegistry, { Record = record, Key = record.Key })
 		return true
 	end
 	
@@ -1265,8 +1268,9 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	
 	record._ReadyProgress = false -- This is to indicate if the record's ready in progress
 	record._SleepProgress = false -- This is to indicate if the record's sleep in progress
-	record._SaveProgress = false -- This is to indicate if the record's save in progress, where Save and Write shares this variable
+	record._SaveProgress = false -- This is to indicate if the record's save in progress, where Save and Write shares this variable	
 	-- Because Write and Save are same, but have different roles in record commiting
+	record._ArchivingProgress = false -- This is to indicate if the record's archiving in progress
 	record._CurrentlyStandby = false -- This is to indicate if the record is currently in standby mode
 	
 	record._LastCompressedData = nil -- This is to store the last compressed data
@@ -1595,7 +1599,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			
 			meta._DataCache[record.Key] = nil
 			meta._ActiveRecords[record.Key] = nil
-			meta._StandbyRegistry[record.Key] = nil
+			table.remove(meta._StandbyRegistry, table.find(meta._StandbyRegistry, record.Key))
 			
 			return true
 		end
@@ -2075,6 +2079,45 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	end
 	
 	function record:Detach()
+		if not meta.Enabled or not UDataComponent.Enabled then
+			return false
+		end
+		
+		if not meta.ArchivationEnabled then
+			return false
+		end
+		
+		if meta.StrictlyUnallowDetaching then
+			return false
+		end
+		
+		if record.CurrentState ~= "Ready" then
+			return false
+		end
+		
+		if record.CurrentState == "Died" then
+			return false
+		end
+		
+		if record._ReadyProgress then
+			return false
+		end
+		
+		if record._SaveProgress then
+			return false
+		end
+		
+		if record._ArchivingProgress then
+			return false
+		end
+		record._ArchivingProgress = true
+		
+		local data = meta._DataCache[record.Key]
+		if not data or record.Data == nil then
+			record._ArchivingProgress = false
+			return false
+		end
+		
 		
 	end
 	
@@ -2138,6 +2181,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.MaxDataObtainingPerTick = 4
 	self.MaxConcurrentSaveWorkers = 5
 	self.MaxConcurrentLoadWorkers = 5
+	self.MaxStandbyWorkers = 10
 	self.StaleServerClaimingTime = 90
 	self.ShutdownSecondsToken = 25
 	
@@ -2165,7 +2209,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._UnreadyData = {} -- { [Key: string] = true }
 	self._DataCache = {} -- { [Key: string] = Data: any }
 	self._CompressionStack = {} -- { [Key: string] = {Record: UDCRecord, Tick: number} }
-	self._StandbyRegistry = {} -- { [Key: string] = Record: UDCRecord }
+	self._StandbyRegistry = {} -- { {Record, Key} }
 	self._LockSessions = ScopedMutex.new(Mutex)
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
 
