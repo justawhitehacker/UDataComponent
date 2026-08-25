@@ -295,6 +295,7 @@ export type __UDCInfo_Internal = {
 	_DataCache : { any? },
 	_CompressionStack : { any? },
 	_StandbyRegistry : { any? },
+	_DirtySave : { any? },
 	_LockSessions : any,
 	_LocalBroadcastListeners : { any? },
 
@@ -1063,7 +1064,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 				
 				local item = table.remove(meta._StandbyRegistry, 1)
 				
-				if not item or not item.Record or not item.Key or not meta._DataCache[item.Key] or not meta._SavePendingQueue[item.Key] then
+				if not item or not item.Record or not item.Key or not meta._DataCache[item.Key] or not meta._DirtySave[item.Key] then
 					continue
 				end
 				
@@ -2245,6 +2246,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._DataCache = {} -- { [Key: string] = Data: any }
 	self._CompressionStack = {} -- { [Key: string] = {Record: UDCRecord, Tick: number} }
 	self._StandbyRegistry = {} -- { {Record, Key} }
+	self._DirtySave = {} -- { [Key: string] = true }
 	self._LockSessions = ScopedMutex.new(Mutex)
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
 
