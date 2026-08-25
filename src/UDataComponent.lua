@@ -823,10 +823,10 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 
 				CurrentData.__data = compressed
 				CurrentData.__flag = flag
-				CurrentData.__bounds = {
-					id = thisOwnerId,
-					since = now
-				}
+				
+				CurrentData.__bounds.serverid = nil
+				CurrentData.__bounds.lastheartbeat = nil
+				CurrentData.__bounds.since = now
 
 				return CurrentData
 			end)
@@ -1022,8 +1022,9 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 			
 			if sameOwner then
 				write_to_wal_or_fs(meta, info.Record, now)
-				table.remove(meta._StandbyRegistry, i)
+				pcall(info.Record.Sleep, info.Record)
 				
+				table.remove(meta._StandbyRegistry, i)
 				break
 			end
 		end
@@ -1039,19 +1040,15 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 		local stopped = false
 		
 		while #meta._StandbyRegistry > 0 do
-			local updateBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
-			
-			local workers = working.Workers
-			
-			while workers <= meta.MaxStandbyWorkers do
+						
+			while working.Workers <= meta.MaxStandbyWorkers do
+				local updateBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+				if updateBudget < 1 then break end
+				
 				local item = table.remove(meta._StandbyRegistry, 1)
 				
-				if not item.Record or not item.Key and meta._DataCache[item.Key] then
+				if not item or not item.Record or not item.Key and meta._DataCache[item.Key] then
 					continue
-				end
-				
-				if updateBudget < 1 then
-					break
 				end
 				
 				working.Workers += 1
@@ -1059,10 +1056,12 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 					write_to_wal_or_fs(meta, item.Record, now)
 					working.Workers -= 1
 					working.Saved += 1
+					
+					print("Saved for " .. item.Record.Key)
 				end))
 			end
 			
-			task.wait(0.5)
+			task.wait()
 		end
 		
 		print(working.Saved)
@@ -1599,7 +1598,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			
 			meta._DataCache[record.Key] = nil
 			meta._ActiveRecords[record.Key] = nil
-			table.remove(meta._StandbyRegistry, table.find(meta._StandbyRegistry, record.Key))
+			
+			local find = table.find(meta._StandbyRegistry, record.Key)
+			if find then
+				table.remove(meta._StandbyRegistry, find)
+			end
 			
 			return true
 		end
