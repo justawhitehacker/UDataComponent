@@ -1047,7 +1047,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 				
 				local item = table.remove(meta._StandbyRegistry, 1)
 				
-				if not item or not item.Record or not item.Key and meta._DataCache[item.Key] then
+				if not item or not item.Record or not item.Key or not meta._DataCache[item.Key] or not meta._SavePendingQueue[item.Key] then
 					continue
 				end
 				
