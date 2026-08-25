@@ -1,4 +1,20 @@
 --[[
+Created by RaihanMan18
+
+Profiles:
+Creator Name: @RaihanMan18 (Raihan Naufal Azmi)
+Creation Name: UDataComponent v2.0
+Integrity: Secure data with ownership and server session locking, with strong runtime data-checking with mutexes and queue
+Team: Solo Creator
+License: MIT License
+Language: Luau
+Version: 2.0
+
+Last Update: Aug 25 2026
+
+SOME INFORMATION USE I OR ME, IT'S REFERENCING TO MYSELF (Raihan), AND
+SOME INFORMATION MENTION "UDC", IT'S REFERENCING TO SELF-AUTOMATIC SYSTEM OF THIS MODULE (UDataComponent)
+
 BATTLE TEST RESULTS:
 
 A. Core Testing
@@ -39,7 +55,24 @@ New Result: FIXED, SUCCESS
 D. Multi Server testing (CRUCIAL)
 1. When a player Awake() his own record, the server and the player claimed the record. When another server and even another player tries to Awake() the same record, it will return false
 2. When the owner of record released the session with Sleep(), another server that tries to claim record with Awake(), it will be able to claim the record
-3.
+3. When ServerB tries to claim a record that has been claimed by ServerA, before shutdown/stale time or stopped heartbeat (because no activity from the record), it cannot claim the record
+4. But, when the record from ServerA is died, it can be claimed by ServerB as long as the heartbeat is dead
+5. When two servers, ServerA and ServerB, both tries to Awake() the same record at the same time, it will be handled gracefully, and only one of them will be able to claim
+6. When a player hopped from ServerA to ServerB, and the record from ServerA has been ready and released, ServerB allowed to claim the record from ServerA
+
+Result of Multi Server Testing: SUCCESS
+
+E. WAL Testing
+1. When there is a WAL entry, it will be applied to the data, but before that, the version of WAL and remaining Main Data will be compared
+2. When WAL entry's version is newer than the remaining Main Data, it will be applied to the data, otherwise, it will be ignored
+3. After WAL entry is applied, the entry will be removed
+4. Even WAL entry didn't get removed after applied its entry to Main Data, it won't be a problem, because it will be removed after the next update and still returns the data
+5. When shutdown or player removing, the data will be written into WAL first, and the emergency compression with specific level applied gracefully, but if the entry was just for player leaving and not
+	server shutdowning, the entry just replaced by ForceSave and the entry of WAL removed
+	
+Result of WAL Testing: SUCCESS
+
+
 
 --]]
 
