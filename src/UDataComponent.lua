@@ -15,6 +15,32 @@ Last Update: Aug 25 2026
 SOME INFORMATION USE I OR ME, IT'S REFERENCING TO MYSELF (Raihan), AND
 SOME INFORMATION MENTION "UDC", IT'S REFERENCING TO SELF-AUTOMATIC SYSTEM OF THIS MODULE (UDataComponent)
 
+Notes!
+
+UDataComponent is an Essential module.
+You can't change the absolute things from UDataComponent and its module,
+like what it's operating internally, you should understand or adapted to what UDC handles for you.
+
+When you tried to change ownership of a record, it may cause a corrupt both in data and this module's consistency.
+Yes, you can use "Enter()", etc. for ownership transfer. BUT, it's not a recommended method, even though I created that methods, just for specific purposes.
+Meanwhile, you can just use Sleep() method to release the ownership. And anoother server can safely claim the record.
+
+API Public Cores that you can use in flexible way (for beginner, advanced, etc):
+
+- Awake() -- Pulling the player's record, and make it "waking up" from sleep, while start to claiming the ownership of this record to current server
+
+- Ready(FindingPlayerTimeout: number = 10) -- Preparing the player's record with deep and strict checking, this is where the data of record decompressed, reconciled, validated, and prepared to record.Data
+
+- Standby() -- Automatically release the record with sleep, while safely save the current data of record that modified from record.Data, both for server shutdown or normal player leaving
+
+- record.Data -- This is where you can access the data of player's record, or modify it. But in condition, the data is ready
+
+- Save(Data: any = record.Data, SegmentIndex: number nil) -- Save the data, and you can specify the segment index to save the data to that segment. And if you don't use custom data, record.Data will be the data to save instead
+
+- Write(WritingFunction: (CurrentData: any)) -- Write the current data of the record safely, meanwhile this is a best choice for modifying the data with validations, 
+
+Sleep() -- Manual core
+
 BATTLE TEST RESULTS:
 
 A. Core Testing
@@ -77,7 +103,10 @@ F. Compression Testing
 2. Otherwise, when the data is big/so big, and no overhead detected, it will be compressed and applied into the data of record
 3. Consistent flag that indicates the compression of data type, 'C' means compressed, 'R' means real/uncompressed/raw
 4. Consistent decompressing by check the flag of record when preparing, if 'C' will be decompressed, 'R' will be applied to record explicitly
-5. 
+5. When a compression stack was compressed and the data was proceed to save, but its in same compression or compressed by the compressor stack, it would use the same compression would rather than generate a new one
+6. Consistent compression, not following the same compression at first write. But a new one, from compressor stack or a new one
+
+Result of Compression Testing: SUCCESS
 
 G. Concurrency Testing
 1. Burst Awake() after joined within 20 calls, didn't crash and budget is saved as much as possible
@@ -85,7 +114,15 @@ G. Concurrency Testing
 3. Grace operations of datastore budget, when trying to load the record, without create too much requests to the datastore
 4. When the player is leaving meanwhile the record processing to save the data, it won't commit into datastore
 5. Calling 100 records, with just save concurrent workers as much as 10. Can commit all records into datastore without any overlaps each keys
-6. 
+6. Mutexes work, when two thread tries to Write for same record. Those functions able to save the data, one thread save the data meanwhile another data waits. and then the waited thread operates
+
+Result of Concurrency Testing: SUCCESS
+
+H. Standby testing
+1. Standby() easily saving the data of record and released, both from PlayerLeaving or server shutdown
+2. Server shutdown handles all active records that in standby, saving then releasing.
+3. Easily handles all 150 player's records when server shutdown, and roughly maximum as 200 records could be handled too
+4. 
 
 --]]
 
@@ -141,6 +178,9 @@ PlayerRecord:
 		-- serverid : string? -> ServerID (JobID) of this data, where this id contains the id of server who claimed this data
 	__data : any -> Data of this player
 	__flag : string (should be char) -> flag that indicates whether the data of this record was compressed ('C') or real ('R'), so that UDC will handle it
+	
+	some other things
+	__password : string (COMING SOON)
 --]]
 
 -- Standard UDataComponent level
@@ -218,6 +258,7 @@ export type UDCInfo = {
 	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
 	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
 	StaleServerClaimingTime : number, -- Duration for the server to claim the data of other server
+	ShutdownSecondsToken : number, -- Duration for the shutdown seconds remaining to prevent data loss
 }
 
 -- info level helper for internal...
@@ -314,6 +355,7 @@ export type __UDCInfo_Internal = {
 	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
 	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
 	StaleServerClaimingTime : number, -- Duration for the server to claim the data if the owner is unknown
+	ShutdownSecondsToken : number, -- Duration for the shutdown seconds token, where the server will not save the data after this duration
 }
 
 -- Record level, where the data record is accessed here
@@ -968,7 +1010,7 @@ local function run_compression_timer(meta : __UDCInfo_Internal)
 					if success then
 						timer.Record._LastCompressedData = compressed
 						timer.Record._LastFlagData = flag
-												
+																		
 						timer.Dirty = false
 						timer.Tick = now
 					end
@@ -1018,7 +1060,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 		end
 		
 		local seconds = 0
-		while #workerThreads > 0 and working.count > 0 and seconds < 25 do
+		while #workerThreads > 0 and working.count > 0 and seconds < meta.ShutdownSecondsToken do
 			seconds += 1
 			task.wait(1)
 		end
@@ -2097,6 +2139,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.MaxConcurrentSaveWorkers = 5
 	self.MaxConcurrentLoadWorkers = 5
 	self.StaleServerClaimingTime = 90
+	self.ShutdownSecondsToken = 25
 	
 	local clone = deepclone(self.DataBlueprint)
 	local compressedBp, flagBp = compare_and_compress(self, clone)
