@@ -1128,7 +1128,7 @@ local function run_autosave(meta : __UDCInfo_Internal)
 	meta._AutosaveCalled = true
 	
 	RunService.Heartbeat:Connect(function()
-		if not meta.Enabled or UDataComponent.Enabled or meta._ShutdownCalled then return end
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end
 		
 		local now = workspace:GetServerTimeNow()
 		local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
@@ -1136,7 +1136,7 @@ local function run_autosave(meta : __UDCInfo_Internal)
 		while budget > 0 and meta._CurrentAutoSaveWorkers < meta.MaxConcurrentAutosaveWorkers and not meta._ShutdownCalled do
 			local dirty = {}
 			for key, info in pairs(meta._AutosaveTimestamp) do
-				if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and meta._DirtySave[key] and not meta._ShutdownCalled then
+				if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and not meta._ShutdownCalled then
 					-- there is a dilemma about just checking dirty records or just saved all
 					-- because if record.Data was modified without getting called by Save(), it won't triggers record to be dirty
 					-- whether to stick with dirty record autosave or record.Data brute-forcing autosave system... I don't know, still thinking
@@ -1144,10 +1144,9 @@ local function run_autosave(meta : __UDCInfo_Internal)
 					-- so, that's why i need to consider this all on this autosave.
 					-- candidate that will replace this:
 					
-					-- `if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and not meta._ShutdownCalled then`
-					-- implemented without "_DirtySave[key]" clearly
-					table.insert(dirty, info.Record)
-					
+					-- `if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and meta._DirtySave[key] and not meta._ShutdownCalled then`
+					-- implemented with "_DirtySave[key]" clearly
+					table.insert(dirty, info.Record)					
 					meta._AutosaveTimestamp[key].Timestamp = workspace:GetServerTimeNow() -- Reset the timestamp to prevent multiple saves, and must be the newest timestamp
 				end
 			end
@@ -1161,8 +1160,6 @@ local function run_autosave(meta : __UDCInfo_Internal)
 				task.spawn(function()
 					record:Save()
 					meta._CurrentAutoSaveWorkers -= 1
-					
-					print("Autosaved!")
 				end)
 			end
 		end
