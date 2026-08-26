@@ -966,7 +966,7 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 				if not success then -- Probably happened when the data is failed to be loaded, fallback to the backup
 					success, result = pcall(fallback_backup, meta, first.Meta)
 				end
-
+				
 				meta._CurrentLoadWorkers -= 1 -- Workers finised the work
 				task.spawn(first.Thread, success, result) -- Continue the thread, regardless of the result
 			end)
@@ -1001,7 +1001,7 @@ local function run_save_queue(meta : __UDCInfo_Internal)
 			meta._CurrentSaveWorkers += 1 -- Workers in working
 			task.spawn(function()
 				local success, err = pcall(save_data, meta, first.Meta)
-								
+				
 				meta._CurrentSaveWorkers -= 1 -- Workers finised the work
 				task.spawn(first.Thread, success) -- Continue the thread, regardless of the result
 			end)
@@ -1058,32 +1058,39 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 	game:BindToClose(function()
 		meta._ShutdownCalled = true
 		
-		local workerThreads = {}
+		local dirty = {}
+		for _, info in ipairs(meta._StandbyRegistry) do
+			if info and info.Record and info.Key and meta._DataCache[info.Key] and meta._DirtySave[info.Key] then
+				table.insert(dirty, info)
+			end
+		end
+		meta._StandbyRegistry = {}
+		
 		local working = { Workers = 0, Saved = 0 }
 		
 		local now = workspace:GetServerTimeNow()
 		local stopped = false
 		
-		while #meta._StandbyRegistry > 0 do
+		while #dirty > 0 and not stopped do
+			if workspace:GetServerTimeNow() - now > meta.ShutdownSecondsToken then
+				stopped = true
+				break
+			end
 						
-			while working.Workers <= meta.MaxStandbyWorkers do
+			while #dirty > 0 and working.Workers < meta.MaxStandbyWorkers do
 				local updateBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
 				if updateBudget < 1 then break end
 				
-				local item = table.remove(meta._StandbyRegistry, 1)
-				
-				if not item or not item.Record or not item.Key or not meta._DataCache[item.Key] or not meta._DirtySave[item.Key] then
-					continue
-				end
+				local item = table.remove(dirty, 1)
 				
 				working.Workers += 1
-				table.insert(workerThreads, task.spawn(function()
+				task.spawn(function()
 					write_to_wal_or_fs(meta, item.Record, now)
 					working.Workers -= 1
 					working.Saved += 1
-					
+
 					print("Saved for " .. item.Record.Key)
-				end))
+				end)
 			end
 			
 			task.wait()
@@ -1336,24 +1343,24 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		meta._AwakeProgress = true
-		
+				
 		local success, result = enqueue_load(meta, record)
-		local result = false
-		
+		local overallResult = false
+				
 		if success and result then
 			record.CurrentState = "WakingUp"
 			meta._UnreadyData[record.Key] = result
 			
-			result = true
-		else
+			overallResult = true
+		elseif success and not result then
 			record.CurrentState = "Sleeping"
 			meta._UnreadyData[record.Key] = nil
 			
-			result = false
+			overallResult = false
 		end
 		meta._AwakeProgress = false
 		
-		return result
+		return overallResult
 	end
 	
 	-- After the data record is awake, we need to make the data is actually ready to be used
