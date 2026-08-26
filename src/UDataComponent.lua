@@ -122,7 +122,9 @@ H. Standby testing
 1. Standby() easily saving the data of record and released, both from PlayerLeaving or server shutdown
 2. Server shutdown handles all active records that in standby, saving then releasing.
 3. Easily handles all 150 player's records when server shutdown, and roughly maximum as 200 records could be handled too
-4. 
+4. Easily saving 200 players when shutdown, with heavy data and compression
+
+Result of Standby Testing: SUCCESS
 
 --]]
 
@@ -1088,15 +1090,11 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 					write_to_wal_or_fs(meta, item.Record, now)
 					working.Workers -= 1
 					working.Saved += 1
-
-					print("Saved for " .. item.Record.Key)
 				end)
 			end
 			
 			task.wait()
 		end
-		
-		print(working.Saved)
 	end)
 end
 
@@ -1439,7 +1437,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-						
+								
 		-- Checking if the data is owned by this server
 		if unready.__bounds.serverid ~= ServerId then
 			penalty()
@@ -1458,7 +1456,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-						
+								
 		-- Checking if player is still in the server
 		local playerFound = false
 		while record.Owner and not playerFound do
@@ -1487,7 +1485,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-						
+								
 		-- Checking if the data is a table
 		if typeof(data) ~= "table" then
 			penalty()
@@ -1628,7 +1626,6 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		record._SleepProgress = false
 		if success and result then
-			record._ArchivingProgress = false
 			meta._ActiveRecords[record.Key] = nil
 			meta._DataCache[record.Key] = nil
 			meta._WriteTimestamp[record.Key] = nil
@@ -2153,6 +2150,12 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		return isSuccess
 	end
 	
+	-- Removing the record of this player
+	-- Where after this function called, nothing in the record could be used, because have been garbaged
+	-- Meanwhile, the record isn't actually destroy, instead it's archived
+	-- Whether you want to get the record back, you can use Unarchive() where recovering the archived record back into the player
+	-- But, in one condition, this function is actually destructive and dangerous. Make sure you're always thinking about what will happened when a record is archived
+	-- 
 	function record:Detach()
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
@@ -2240,7 +2243,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 								end
 							end
 							
-							CurrentData = data
+							CurrentData = result
 							CurrentData.__bounds = {
 								id = thisOwnerId,
 								since = now,
@@ -2359,6 +2362,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					
 					if unarchSuccess and unarchResult then
 						record._UnarchivingProgress = false
+						
+						record.CurrentState = "Asleep"
+						record.IsArchived = false
+						
 						pcall(function()
 							meta._CurrentArchivedDataStore:RemoveAsync(record.Key)
 						end)
