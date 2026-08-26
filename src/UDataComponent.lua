@@ -2495,9 +2495,11 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	Configurations = Configurations or {}
 	
 	local storageKey = DataStoreName .. "-" .. Scope
-	local infoStorage = InfosStorage[storageKey] or {}
+	if InfosStorage[storageKey] then
+		return InfosStorage[storageKey]
+	end
 	
-	local self = setmetatable(infoStorage, UDataComponent)
+	local self = setmetatable({}, UDataComponent)
 	
 	self.Name = DataStoreName
 	self.Scope = Scope
