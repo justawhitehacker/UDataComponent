@@ -260,6 +260,7 @@ export type UDCInfo = {
 	MaxDataObtainingPerTick : number, -- Maximum data obtaining per tick in FIFO queue,
 	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
 	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
+	MaxConcurrentAutosaveWorkers : number, -- Maximum concurrent autosave workers
 	MaxStandbyWorkers : number, -- Maximum concurrent workers in standby when trying to commit data when shutdown
 	StaleServerClaimingTime : number, -- Duration for the server to claim the data of other server
 	ShutdownSecondsToken : number, -- Duration for the shutdown seconds remaining to prevent data loss
@@ -313,6 +314,7 @@ export type __UDCInfo_Internal = {
 	
 	_CurrentLoadWorkers : number,
 	_CurrentSaveWorkers : number,
+	_CurrentAutoSaveWorkers : number,
 
 	_TrackedValidations : { any? },
 	_TrackedSchemas : { any? },
@@ -359,6 +361,7 @@ export type __UDCInfo_Internal = {
 	MaxDataObtainingPerTick : number, -- Maximum data obtaining per tick in FIFO queue,
 	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
 	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
+	MaxConcurrentAutosaveWorkers : number, -- Maximum concurrent autosave workers
 	MaxStandbyWorkers : number, -- Maximum concurrent workers in standby when trying to commit data when shutdown
 	StaleServerClaimingTime : number, -- Duration for the server to claim the data if the owner is unknown
 	ShutdownSecondsToken : number, -- Duration for the shutdown seconds token, where the server will not save the data after this duration
@@ -1062,6 +1065,8 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 		local userId = Player.UserId
 		local now = workspace:GetServerTimeNow()
 		
+		if meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
+		
 		for i, info in ipairs(meta._StandbyRegistry) do
 			local sameOwner = info.Record and info.Record.Owner and info.Record.Owner.UserId == userId
 			
@@ -1116,6 +1121,54 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 	end)
 end
 
+-- just to remember, autosave in UDC saving the current record.Data modification
+-- so, instead just using Write() to modificate the data, and Save() to save record.Data or custom data immediately, record.Data could be handled by autosave itself
+local function run_autosave(meta : __UDCInfo_Internal)
+	if meta._AutosaveCalled or meta._ShutdownCalled then return end
+	meta._AutosaveCalled = true
+	
+	RunService.Heartbeat:Connect(function()
+		if not meta.Enabled or UDataComponent.Enabled or meta._ShutdownCalled then return end
+		
+		local now = workspace:GetServerTimeNow()
+		local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+		
+		while budget > 0 and meta._CurrentAutoSaveWorkers < meta.MaxConcurrentAutosaveWorkers and not meta._ShutdownCalled do
+			local dirty = {}
+			for key, info in pairs(meta._AutosaveTimestamp) do
+				if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and meta._DirtySave[key] and not meta._ShutdownCalled then
+					-- there is a dilemma about just checking dirty records or just saved all
+					-- because if record.Data was modified without getting called by Save(), it won't triggers record to be dirty
+					-- whether to stick with dirty record autosave or record.Data brute-forcing autosave system... I don't know, still thinking
+					-- because I was also allow developers to modificate record.Key, but what if they're forgetting to call Save()?
+					-- so, that's why i need to consider this all on this autosave.
+					-- candidate that will replace this:
+					
+					-- `if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and not meta._ShutdownCalled then`
+					-- implemented without "_DirtySave[key]" clearly
+					table.insert(dirty, info.Record)
+					
+					meta._AutosaveTimestamp[key].Timestamp = workspace:GetServerTimeNow() -- Reset the timestamp to prevent multiple saves, and must be the newest timestamp
+				end
+			end
+			
+			if #dirty == 0 then break end
+			
+			for _, record in ipairs(dirty) do
+				if budget <= 0 then break end
+				
+				meta._CurrentAutoSaveWorkers += 1
+				task.spawn(function()
+					record:Save()
+					meta._CurrentAutoSaveWorkers -= 1
+					
+					print("Autosaved!")
+				end)
+			end
+		end
+	end)
+end
+
 local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
 	run_load_queue(meta) -- First-time run the load queue if it's not running
 	
@@ -1166,6 +1219,18 @@ local function add_standby_record(meta : __UDCInfo_Internal, record : UDCRecord)
 	local find = find_standby_index(meta, record.Key)
 	if not find then
 		table.insert(meta._StandbyRegistry, { Record = record, Key = record.Key })
+		return true
+	end
+	
+	return false
+end
+
+local function push_to_autosave(meta : __UDCInfo_Internal, record : UDCRecord)
+	run_autosave(meta)
+	
+	local now = workspace:GetServerTimeNow()
+	if not meta._AutosaveTimestamp[record.Key] then
+		meta._AutosaveTimestamp[record.Key] = { Record = record, Timestamp = now }
 		return true
 	end
 	
@@ -1546,6 +1611,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		meta._ActiveRecords[record.Key] = record -- Add the record to active records, so developer can access the record
 		
+		push_to_autosave(meta, record)
+		
 		record._ReadyProgress = false
 		
 		return true
@@ -1776,7 +1843,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		if meta._WriteTimestamp[record.Key] and now - meta._WriteTimestamp[record.Key] < meta.DataWritingCooldown then
 			return false
 		end
-		
+		meta._WriteTimestamp[record.Key] = now
+
 		while record._SaveProgress do
 			task.wait()
 		end
@@ -1844,7 +1912,6 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		record._SaveProgress = false
 		if success then
-			meta._WriteTimestamp[record.Key] = now
 			return true
 		end
 		
@@ -2475,6 +2542,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.MaxDataObtainingPerTick = 4
 	self.MaxConcurrentSaveWorkers = 5
 	self.MaxConcurrentLoadWorkers = 5
+	self.MaxConcurrentAutosaveWorkers = 5
 	self.MaxStandbyWorkers = 10
 	self.StaleServerClaimingTime = 90
 	self.ShutdownSecondsToken = 25
@@ -2508,7 +2576,6 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._LockSessions = ScopedMutex.new(Mutex)
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
 
-	self._ExclusiveTimerCalled = false
 	self._ShutdownCalled = false
 	self._ExclusiveSafetyCalled = false
 	self._IsSaveRunning = false
@@ -2516,9 +2583,11 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._IsCompressionTimerRunning = false
 	self._CacheCleaningCalled = false
 	self._StandbyReady = false
+	self._AutosaveCalled = false
 	
 	self._CurrentLoadWorkers = 0
 	self._CurrentSaveWorkers = 0
+	self._CurrentAutoSaveWorkers = 0
 
 	self._TrackedValidations = {} -- { [Key] = { Member = ValidationFunction, ... } }
 	self._TrackedSchemas = {} -- { [Key] = { Member = ValidationFunction, ... } }
