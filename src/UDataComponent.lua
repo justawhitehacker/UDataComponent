@@ -212,9 +212,10 @@ export type UDCInfo = {
 	-- This is where the record of player's data is obtained:
 	-- @param: Key: number | string -> Key of the record of this player
 	-- @param: OwnerOfThisData: Player -> Player who owns this data, prevent other servers or other player to obtain or commit the data
-	ViewCurrentRecord: (UDCInfo: UDCInfo, Key: number | string) -> UDCRecord,
+	ViewCurrentRecord: (UDCInfo: UDCInfo, Key: number | string, Version: string?) -> UDCRecord,
 	-- This is where you can view the record of player's data, also showing owner and version
 	-- @param: Key: number | string -> Key of the record of this player
+	-- @param: Version: string? -> Version of the record of this player, if not specified, the latest version will be viewed
 	GetLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
 	-- This is where the record of local data is obtained
 	-- You can say, in UDC, local data is just "global data of this data store" or "global record"
@@ -273,13 +274,13 @@ export type __UDCInfo_Internal = {
 	-- This is where the record of player's data is obtained:
 	-- @param: Key: number | string -> Key of the record of this player
 	-- @param: OwnerOfThisData: Player -> Player who owns this data, prevent other servers or other player to obtain or commit the data
-	ViewCurrentRecord: (UDCInfo: UDCInfo, Key: number | string) -> UDCRecord,
+	ViewCurrentRecord: (UDCInfo: UDCInfo, Key: number | string) -> UDCReadOnlyRecord,
 	-- This is where you can view the record of player's data, also showing owner and version
 	-- @param: Key: number | string -> Key of the record of this player
 	GetLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
 	-- This is where the record of local data is obtained
 	-- You can say, in UDC, local data is just "global data of this data store" or "global record"
-	ViewLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
+	ViewLocalRecord: (UDCInfo: UDCInfo) -> UDCReadOnlyRecord,
 	-- This is where you can view the record of local data
 	
 	_CurrentDataStore : DataStore,
@@ -459,6 +460,12 @@ export type UDCMessaging = {
 
 export type UDCEventConnector = {
 	
+}
+
+export type UDCReadOnlyRecord = {
+	Version: number,
+	Owner: Player?,
+	Data: { any? },
 }
 
 -- finding the index of standby registry
@@ -2563,6 +2570,40 @@ function UDataComponent:GetCurrentRecord(Key: number | string, OwnerOfThisData: 
 	end
 	
 	return current_record(self, Key, OwnerOfThisData) :: UDCRecord
+end
+
+function UDataComponent:ViewCurrentRecord(Key: number | string, Version: string?) : UDCRecord
+	if typeof(Key) == "string" and #Key > self.MaxKeyLength then
+		warn(string.format("[%s] : Key is too long", self.ErrorReasonNamespace))
+		Key = string.sub(Key, 1, tonumber(self.MaxKeyLength))
+	end
+	
+	local ResultData
+	if Version then
+		local success, result = pcall(function()
+			return self._CurrentDataStore:GetVersionAsync(Key, Version)
+		end)
+		
+		if success and result then ResultData = result else return nil end
+	else
+		local success, result = pcall(function()
+			return self._CurrentDataStore:GetAsync(Key)
+		end)
+		
+		if success and result then ResultData = result else return nil end
+	end
+	
+	local success, decompressed = pcall(Compressor.TryToDecompress, ResultData and ResultData.__data, ResultData and ResultData.__flag)
+	
+	if not success then
+		return nil
+	end
+	
+	return {
+		Version = ResultData and ResultData.__version or 0,
+		Owner = ResultData and ResultData.__bounds and ResultData.__bounds.id or nil,
+		Data = decompressed
+	}
 end
 
 function UDataComponent:GetLocalRecord() : UDCRecord
