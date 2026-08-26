@@ -161,12 +161,12 @@ UDataComponent.Enabled = true
 
 -- State Machines:
 --[[
-	"Asleep" -> where the record is not owned by any server or remaining untouched yet
-	"WakingUp" -> where the record is claimed by a server, but not yet confirmed by the server
+	"Asleep" -> where the record is not owned by any server or remaining untouched, or the data has been unarchived
+	"WakingUp" -> where the record is claimed by a server, but not ready to be used yet
 	"Ready" -> where the record is ready to be used
-	"Sleeping" -> where the record is released by the server, but not yet confirmed by the server
-	"Died" -> where the record is getting detached or removed, along the release
-	"Reborn" -> where the record is getting unarchived, and start to awake
+	"Running" -> where the record is proceed to saving the data, and return to Ready again after saving process stopped
+	"Sleeping" -> where the record is failed to be ready, so the record fall asleep again, but in condition that data has been loaded but unready
+	"Died" -> where the record is getting detached/removed/archived, along the release
 --]]
 
 -- Data Structure:
@@ -375,6 +375,7 @@ export type UDCRecord = {
 	Messaging: UDCMessaging, -- Utils for the messaging
 	Version: number, -- Version of this data
 	Data: any?, -- Loaded Data that has been loaded, this is a clone from the actual data/cache, where this must be a read member
+	CurrentState: string, -- Current state of this data, can be: "Asleep", "WakingUp", "Ready", "Running", "Sleeping", "Died"
 	
 	-- These are two Write functions, with two types too: Normal and Force
 	-- Normal is when you writing the data with cooldown and lock, especially when the data is pending into queue to be commited
@@ -681,11 +682,16 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 end
 
 local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
+	record.CurrentState = "Running"
+
 	local now = workspace:GetServerTimeNow()
 	local thisOwnerId = record.Owner and record.Owner.UserId or 0
 	
 	local dataCache = meta._DataCache[record.Key]
-	if not dataCache then return false end
+	if not dataCache then 
+		record.CurrentState = "Ready"
+		return false 
+	end
 	
 	local tempData = dataCache.__data
 	
@@ -701,6 +707,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 			local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
 
 			if not ok then
+				record.CurrentState = "Ready"
 				return false
 			end
 
@@ -714,7 +721,10 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 		end
 	else
 		local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
-		if not ok then return false end
+		if not ok then 
+			record.CurrentState = "Ready"
+			return false 
+		end
 
 		compressed, flag = newCompressed, newFlag
 
@@ -727,7 +737,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	
 	local commitedData = deepclone(dataCache)
 	commitedData.__data = compressed
-	
+		
 	local success, result
 	meta._LockSessions:Do(record.Key, function()
 		success, result = pcall(function()
@@ -777,6 +787,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 			meta._DirtySave[record.Key] = nil
 		end
 	end
+	record.CurrentState = "Ready"
 	
 	return result
 end
@@ -1579,7 +1590,15 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		while record.CurrentState == "Running" do
+			task.wait()
+		end
+		
 		if record._ReadyProgress then
+			return false
+		end
+		
+		if record._SaveProgress then
 			return false
 		end
 		
@@ -1841,6 +1860,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		while record.CurrentState == "Running" do
+			task.wait()
+		end
+		
 		local now = workspace:GetServerTimeNow()
 		while record._SaveProgress do
 			task.wait()
@@ -2000,6 +2023,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		while record.CurrentState == "Running" do
+			task.wait()
+		end
+		 
 		local now = workspace:GetServerTimeNow()
 		if record.CurrentState ~= "Ready" then
 			return false
@@ -2168,6 +2195,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		while record.CurrentState == "Running" do
+			task.wait()
+		end
+		
 		local now = workspace:GetServerTimeNow()
 		if not meta.ArchivationEnabled then
 			return false
@@ -2220,6 +2251,24 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		meta._ActiveRecords[record.Key] = nil
+		meta._DataCache[record.Key] = nil
+		meta._WriteTimestamp[record.Key] = nil
+		meta._SwapTimestamp[record.Key] = nil
+		meta._AutosaveTimestamp[record.Key] = nil
+		meta._CompressionStack[record.Key] = nil
+		meta._LocalBroadcastListeners[record.Key] = nil
+		meta._DirtySave[record.Key] = nil
+
+		meta._TrackedClamps[record.Key] = nil
+		meta._TrackedSchemas[record.Key] = nil
+		meta._TrackedValidations[record.Key] = nil
+
+		record.Data = nil
+		record.Owner = nil
+		record.Version = 0
+		record.CurrentState = "Died"		
+		
 		local thisOwnerId = record.Owner and record.Owner.UserId or 0
 		if meta.ArchivationEnabled and success and result then
 			local isArchived = false
@@ -2261,27 +2310,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					
 					if archSuccess and archResult then
 						isArchived = true
-						
-						record._ArchivingProgress = false
-
-						meta._ActiveRecords[record.Key] = nil
-						meta._DataCache[record.Key] = nil
-						meta._WriteTimestamp[record.Key] = nil
-						meta._SwapTimestamp[record.Key] = nil
-						meta._AutosaveTimestamp[record.Key] = nil
-						meta._CompressionStack[record.Key] = nil
-						meta._LocalBroadcastListeners[record.Key] = nil
-						meta._DirtySave[record.Key] = nil
-
-						meta._TrackedClamps[record.Key] = nil
-						meta._TrackedSchemas[record.Key] = nil
-						meta._TrackedValidations[record.Key] = nil
-
-						record.Data = nil
-						record.Owner = nil
 						record.IsArchived = true
-						record.Version = 0
-						record.CurrentState = "Died"		
+						record._ArchivingProgress = false
 
 						local find = find_standby_index(meta, record.Key)
 						if find then
@@ -2380,6 +2410,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 						return true
 					end
 				end
+				
+				task.wait()
 			end
 		end
 		record._UnarchivingProgress = false
