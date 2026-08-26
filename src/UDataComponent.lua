@@ -1625,16 +1625,26 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end)
 		end)
 		
+		record._SleepProgress = false
 		if success and result then
-			record.Owner = nil
-			record.Data = nil
-			record.Version = 0
-				
-			record.CurrentState = "Asleep"
-			record._SleepProgress = false
-			
-			meta._DataCache[record.Key] = nil
+			record._ArchivingProgress = false
 			meta._ActiveRecords[record.Key] = nil
+			meta._DataCache[record.Key] = nil
+			meta._WriteTimestamp[record.Key] = nil
+			meta._SwapTimestamp[record.Key] = nil
+			meta._AutosaveTimestamp[record.Key] = nil
+			meta._CompressionStack[record.Key] = nil
+			meta._LocalBroadcastListeners[record.Key] = nil
+			meta._DirtySave[record.Key] = nil
+
+			meta._TrackedClamps[record.Key] = nil
+			meta._TrackedSchemas[record.Key] = nil
+			meta._TrackedValidations[record.Key] = nil
+
+			record.Data = nil
+			record.Owner = nil
+			record.Version = 0
+			record.CurrentState = "Asleep"	
 			
 			local find = find_standby_index(meta, record.Key)
 			if find then
@@ -2147,6 +2157,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		local now = workspace:GetServerTimeNow()
 		if not meta.ArchivationEnabled then
 			return false
 		end
@@ -2182,7 +2193,96 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		for i, pending in ipairs(meta._SavePendingQueue) do
+			if pending.Meta and pending.Meta.Key == record.Key then
+				table.remove(meta._SavePendingQueue, i)
+				break
+			end
+		end
 		
+		local success, result = pcall(function()
+			return meta._CurrentDataStore:RemoveAsync(record.Key)
+		end)
+		
+		if not success then
+			record._ArchivingProgress = false
+			return false
+		end
+		
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+		if meta.ArchivationEnabled and success and result then
+			local isArchived = false
+
+			while not isArchived do
+				local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+
+				if budget > 0 then
+					local archSuccess, archResult = pcall(function()
+						return meta._CurrentArchivedDataStore:UpdateAsync(record.Key, function(CurrentData)
+							if CurrentData and CurrentData.__bounds and CurrentData.__bounds.serverid and CurrentData.__bounds.id and CurrentData.__bounds.lastheartbeat then
+								local bounds = CurrentData.__bounds
+								local id = CurrentData.__bounds.id
+								local serverid = CurrentData.__bounds.serverid
+								local lastheartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+								local isStale = now - lastheartbeat > meta.StaleServerClaimingTime
+								local isCacheStale = now - (result.__bounds and result.__bounds.lastheartbeat or 0) > meta.StaleServerClaimingTime
+
+								local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+								local isDifferentOwner = id and id ~= thisOwnerId
+								
+								local isCacheServerDifferent = result.__bounds and result.__bounds.serverid and result.__bounds.serverid ~= serverid and result.__bounds.serverid ~= ServerId and not isCacheStale
+								local isCacheDifferentOwner = result.__bounds and result.__bounds.id and result.__bounds.id ~= id and result.__bounds.id ~= thisOwnerId
+								
+								if isDifferentOwner or isDifferentServer or isCacheServerDifferent or isCacheDifferentOwner then
+									return nil
+								end
+							end
+							
+							CurrentData = data
+							CurrentData.__bounds = {
+								id = thisOwnerId,
+								since = now,
+							}
+							return CurrentData
+						end)
+					end)
+					
+					if archSuccess and archResult then
+						isArchived = true
+					end
+				end
+				
+				task.wait()
+			end
+		end
+		
+		record._ArchivingProgress = false
+		meta._ActiveRecords[record.Key] = nil
+		meta._DataCache[record.Key] = nil
+		meta._WriteTimestamp[record.Key] = nil
+		meta._SwapTimestamp[record.Key] = nil
+		meta._AutosaveTimestamp[record.Key] = nil
+		meta._CompressionStack[record.Key] = nil
+		meta._LocalBroadcastListeners[record.Key] = nil
+		meta._DirtySave[record.Key] = nil
+		
+		meta._TrackedClamps[record.Key] = nil
+		meta._TrackedSchemas[record.Key] = nil
+		meta._TrackedValidations[record.Key] = nil
+		
+		record.Data = nil
+		record.Owner = nil
+		record.IsArchived = true
+		record.Version = 0
+		record.CurrentState = "Died"		
+		
+		local find = find_standby_index(meta, record.Key)
+		if find then
+			table.remove(meta._StandbyRegistry, find)
+		end
+		
+		return success and result
 	end
 	
 	function record:Unarchive()
@@ -2268,8 +2368,8 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._WriteTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SwapTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
-	self._SavePendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup } }
-	self._ObtainPendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup } }
+	self._SavePendingQueue = {} -- { {Meta: UDCRecord, Thread: thread} }
+	self._ObtainPendingQueue = {} -- { {Meta: UDCRecord, Thread: thread} }
 	self._UnreadyData = {} -- { [Key: string] = true }
 	self._DataCache = {} -- { [Key: string] = Data: any }
 	self._CompressionStack = {} -- { [Key: string] = {Record: UDCRecord, Tick: number} }
