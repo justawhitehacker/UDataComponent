@@ -1303,6 +1303,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record._SaveProgress = false -- This is to indicate if the record's save in progress, where Save and Write shares this variable	
 	-- Because Write and Save are same, but have different roles in record commiting
 	record._ArchivingProgress = false -- This is to indicate if the record's archiving in progress
+	record._UnarchivingProgress = false -- This is to indicate if the record's unarchiving in progress
 	record._CurrentlyStandby = false -- This is to indicate if the record is currently in standby mode
 	
 	record._LastCompressedData = nil -- This is to store the last compressed data
@@ -2250,43 +2251,126 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					
 					if archSuccess and archResult then
 						isArchived = true
+						
+						record._ArchivingProgress = false
+
+						meta._ActiveRecords[record.Key] = nil
+						meta._DataCache[record.Key] = nil
+						meta._WriteTimestamp[record.Key] = nil
+						meta._SwapTimestamp[record.Key] = nil
+						meta._AutosaveTimestamp[record.Key] = nil
+						meta._CompressionStack[record.Key] = nil
+						meta._LocalBroadcastListeners[record.Key] = nil
+						meta._DirtySave[record.Key] = nil
+
+						meta._TrackedClamps[record.Key] = nil
+						meta._TrackedSchemas[record.Key] = nil
+						meta._TrackedValidations[record.Key] = nil
+
+						record.Data = nil
+						record.Owner = nil
+						record.IsArchived = true
+						record.Version = 0
+						record.CurrentState = "Died"		
+
+						local find = find_standby_index(meta, record.Key)
+						if find then
+							table.remove(meta._StandbyRegistry, find)
+						end
+						
+						return true
 					end
 				end
 				
 				task.wait()
 			end
 		end
-		
 		record._ArchivingProgress = false
-		meta._ActiveRecords[record.Key] = nil
-		meta._DataCache[record.Key] = nil
-		meta._WriteTimestamp[record.Key] = nil
-		meta._SwapTimestamp[record.Key] = nil
-		meta._AutosaveTimestamp[record.Key] = nil
-		meta._CompressionStack[record.Key] = nil
-		meta._LocalBroadcastListeners[record.Key] = nil
-		meta._DirtySave[record.Key] = nil
-		
-		meta._TrackedClamps[record.Key] = nil
-		meta._TrackedSchemas[record.Key] = nil
-		meta._TrackedValidations[record.Key] = nil
-		
-		record.Data = nil
-		record.Owner = nil
-		record.IsArchived = true
-		record.Version = 0
-		record.CurrentState = "Died"		
-		
-		local find = find_standby_index(meta, record.Key)
-		if find then
-			table.remove(meta._StandbyRegistry, find)
-		end
-		
-		return success and result
+
+		return false
 	end
 	
 	function record:Unarchive()
+		if not meta.Enabled or not UDataComponent.Enabled then
+			return false
+		end
 		
+		local now = workspace:GetServerTimeNow()
+		if not meta.ArchivationEnabled then
+			return false
+		end
+		
+		if record.CurrentState ~= "Asleep" and record.CurrentState ~= "Died" then
+			return false
+		end
+		
+		if record._ReadyProgress then
+			return false
+		end
+
+		if record._SaveProgress then
+			return false
+		end
+
+		if record._ArchivingProgress then
+			return false
+		end
+		
+		if record._UnarchivingProgress then
+			return false
+		end
+		record._UnarchivingProgress = true
+		
+		local success, unarchivedData = pcall(function()
+			return meta._CurrentArchivedDataStore:GetAsync(record.Key)
+		end)
+		
+		if not success then
+			record._UnarchivingProgress = false
+			return false
+		end
+		
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+		if success and unarchivedData then
+			while meta.Enabled and UDataComponent.Enabled do
+				local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+				
+				if budget > 0 then
+					local unarchSuccess, unarchResult = pcall(function()
+						return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+							if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and unarchivedData.__bounds and unarchivedData.__bounds.id then
+								local id = CurrentData.__bounds.id
+								local archiveId = unarchivedData.__bounds.id
+								
+								if id ~= archiveId or id ~= thisOwnerId or archiveId ~= thisOwnerId then
+									return nil
+								end
+							end
+							
+							CurrentData = unarchivedData
+							
+							CurrentData.__bounds = {
+								id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerId,
+								since = CurrentData.__bounds and CurrentData.__bounds.since or now,
+							}
+							return CurrentData
+						end)
+					end)
+					
+					if unarchSuccess and unarchResult then
+						record._UnarchivingProgress = false
+						pcall(function()
+							meta._CurrentArchivedDataStore:RemoveAsync(record.Key)
+						end)
+						
+						return true
+					end
+				end
+			end
+		end
+		record._UnarchivingProgress = false
+		
+		return false
 	end
 	
 	function record:IsRecorded()
