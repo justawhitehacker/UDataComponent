@@ -375,7 +375,7 @@ export type UDCRecord = {
 	Event: UDCEvent, -- Utils for the events
 	Validation: UDCValidation, -- Utils for the validation
 	Swap: UDCSwap, -- Utils for the swap
-	Messaging: UDCMessaging, -- Utils for the messaging
+	Messaging: UDCBroadcasting, -- Utils for the messaging
 	Version: number, -- Version of this data
 	Data: any?, -- Loaded Data that has been loaded, this is a clone from the actual data/cache, where this must be a read-only member
 	CurrentState: string, -- Current state of this data, can be: "Asleep", "WakingUp", "Ready", "Running", "Sleeping", "Died"
@@ -458,7 +458,7 @@ export type UDCSwap = {
 	
 }
 
-export type UDCMessaging = {
+export type UDCBroadcasting = {
 	
 }
 
@@ -510,16 +510,13 @@ local function deepfreeze(tab)
 		return
 	end
 	
-	local clonedTable = deepclone(tab)
-	table.freeze(clonedTable)
-	
-	for _, v in clonedTable do
-		if typeof(v) == "table" and not table.isfrozen(v) then
-			deepfreeze(v)
-		end	
+	local tb = {}
+	for k, v in pairs(tab) do
+		tb[k] = deepfreeze(v)
 	end
 	
-	return clonedTable
+	table.freeze(tb)
+	return tb
 end
 
 -- to call event
@@ -892,10 +889,10 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 		end)
 	end)
 	
-	local result = success and result
+	local xresult = success and result
 	
-	if result and not meta._ShutdownCalled then
-		local isForcedSaveSuccess, saveResult = pcall(record.ForceSave, record)
+	if xresult and not meta._ShutdownCalled then
+		local isForcedSaveSuccess, saveResult = pcall(record.ForceSave, record, result)
 		
 		local index = 0
 		for i, pending in ipairs(meta._SavePendingQueue) do
@@ -912,9 +909,11 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 		if isForcedSaveSuccess and saveResult then
 			pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
 		end
+		
+		record.CurrentState = "Asleep"
 	end
 	
-	return result
+	return xresult
 end
 
 local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
@@ -1172,9 +1171,12 @@ local function run_autosave(meta : __UDCInfo_Internal)
 			for _, record in ipairs(dirty) do
 				if budget <= 0 then break end
 				
+				local cache = meta._DataCache[record.Key]
+				if not cache then continue end
+				
 				meta._CurrentAutoSaveWorkers += 1
 				task.spawn(function()
-					record:Save()
+					pcall(record.Save, record, cache)
 					meta._CurrentAutoSaveWorkers -= 1
 				end)
 			end
@@ -1322,7 +1324,7 @@ local function clamp_values(meta : __UDCInfo_Internal, record : UDCRecord, data 
 		local min, max = info.Min, info.Max
 		local penetration = info.Penetration
 		
-		if not min or not max or not penetration then
+		if not penetration then
 			continue -- just pass, if there is no these elements in validator
 		end
 		
@@ -1331,8 +1333,15 @@ local function clamp_values(meta : __UDCInfo_Internal, record : UDCRecord, data 
 			continue -- if there is no element that want to be clamped OR it's not a number
 		end
 		
-		local clamp = math.clamp(element, min, max)
-		local success = change_element(data, key, clamp, penetration)
+		local filtered
+		if min and not max then filtered = math.max(element, min)
+		elseif not min and max then filtered = math.min(element, max)
+		elseif min and max then filtered = math.clamp(element, min, max)
+		else 
+			continue -- if there is no min and max
+		end
+		
+		local success = change_element(data, key, filtered, penetration)
 		
 		if not success then
 			continue -- if there is no element that want to be clamped
@@ -1821,6 +1830,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record._SaveProgress = false
 			return false
 		end
+		
+		if Data == nil then
+			record._SaveProgress = false
+			return false
+		end
 				
 		meta._LockSessions:Do(record.Key, function()
 			if SegmentIndex then
@@ -1974,6 +1988,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record._SaveProgress = false
 			return false
 		end
+		
+		if Data == nil then
+			record._SaveProgress = false
+			return false
+		end
 		record.CurrentState = "Running"
 		
 		local thisOwnerId = record.Owner and record.Owner.UserId or 0
@@ -2092,7 +2111,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 		end
 		record._SaveProgress = false
-		record.CurrentState = "Running"
+		record.CurrentState = "Ready"
 
 		return isSuccess
 	end
@@ -2260,7 +2279,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 		end
 		record._SaveProgress = false
-		record.CurrentState = "Running"
+		record.CurrentState = "Ready"
 
 		return isSuccess
 	end
@@ -2332,6 +2351,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+		
 		meta._ActiveRecords[record.Key] = nil
 		meta._DataCache[record.Key] = nil
 		meta._WriteTimestamp[record.Key] = nil
@@ -2350,7 +2371,6 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		record.Version = 0
 		record.CurrentState = "Died"		
 		
-		local thisOwnerId = record.Owner and record.Owner.UserId or 0
 		if meta.ArchivationEnabled and success and result then
 			local isArchived = false
 
@@ -2716,11 +2736,9 @@ function UDataComponent:ViewCurrentRecord(Key: number | string, Version: string?
 		return nil
 	end
 	
-	return {
-		Version = ResultData and ResultData.__version or 0,
-		Owner = ResultData and ResultData.__bounds and ResultData.__bounds.id or nil,
-		Data = decompressed
-	}
+	local plr = Players:GetPlayerByUserId(ResultData and ResultData.__bounds and ResultData.__bounds.id)
+	
+	return deepfreeze({ Version = ResultData and ResultData.__version or 0, Owner = plr or nil, Data = decompressed })
 end
 
 function UDataComponent:GetLocalRecord() : UDCRecord
