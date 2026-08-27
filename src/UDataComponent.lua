@@ -33,9 +33,9 @@ API Public Cores that you can use in flexible way (for beginner, advanced, etc):
 
 - Standby() -- Automatically release the record with sleep, while safely save the current data of record that modified from record.Data, both for server shutdown or normal player leaving
 
-- record.Data -- This is where you can access the data of player's record, or modify it. But in condition, the data is ready
+- record.Data -- This is where you can access the data of player's record as read-only. But in condition, the data is ready
 
-- Save(Data: any = record.Data, SegmentIndex: number nil) -- Save the data, and you can specify the segment index to save the data to that segment. And if you don't use custom data, record.Data will be the data to save instead
+- Save(Data: any = record.Data, SegmentIndex: number nil) -- Save the whole data, and you can specify the segment index to save the data to that segment.
 
 - Write(WritingFunction: (CurrentData: any)) -- Write the current data of the record safely, meanwhile this is a best choice for modifying the data with validations, 
 
@@ -377,7 +377,7 @@ export type UDCRecord = {
 	Swap: UDCSwap, -- Utils for the swap
 	Messaging: UDCMessaging, -- Utils for the messaging
 	Version: number, -- Version of this data
-	Data: any?, -- Loaded Data that has been loaded, this is a clone from the actual data/cache, where this must be a read member
+	Data: any?, -- Loaded Data that has been loaded, this is a clone from the actual data/cache, where this must be a read-only member
 	CurrentState: string, -- Current state of this data, can be: "Asleep", "WakingUp", "Ready", "Running", "Sleeping", "Died"
 	
 	-- These are two Write functions, with two types too: Normal and Force
@@ -400,8 +400,8 @@ export type UDCRecord = {
 	-- @info -- You can call this when you're needing a manual control over releasing session, meanwhile this was called automatically when Standby() triggered
 	-- @return boolean -- Status of the releasing the data, true if success
 	
-	Save: (UDCRecord: UDCRecord, Data: any?, SegmentIndex: number?) -> boolean, -- (Suspending) this is saving data where the data must be an over-all data, which is the previous recored that haven't been edited also must be saved too, will pushed into save pending queue then changed the read data
-	-- @param Data: any? -- Data to commit, if nil, current read data will be used as data to commit
+	Save: (UDCRecord: UDCRecord, Data: any, SegmentIndex: number?) -> boolean, -- (Suspending) this is saving data where the data must be an over-all data, which is the previous record that haven't been edited also must be saved too, will pushed into save pending queue then changed the read data
+	-- @param Data: any? -- Custom data to commit, or saving whole data.
 	-- @param SegmentIndex: number? -- Where the current data is contained in an index to
 	-- @return boolean -- Status of the saving data, true if success, but true in here isn't meaning the data is actually commited
 	
@@ -502,6 +502,24 @@ local function deepclone(tab)
 	end
 
 	return newTab
+end
+
+-- for deepcloning then deepfreezing table
+local function deepfreeze(tab)
+	if typeof(tab) ~= "table" then
+		return
+	end
+	
+	local clonedTable = deepclone(tab)
+	table.freeze(clonedTable)
+	
+	for _, v in clonedTable do
+		if typeof(v) == "table" and not table.isfrozen(v) then
+			deepfreeze(v)
+		end	
+	end
+	
+	return clonedTable
 end
 
 -- to call event
@@ -1136,16 +1154,14 @@ local function run_autosave(meta : __UDCInfo_Internal)
 		while budget > 0 and meta._CurrentAutoSaveWorkers < meta.MaxConcurrentAutosaveWorkers and not meta._ShutdownCalled do
 			local dirty = {}
 			for key, info in pairs(meta._AutosaveTimestamp) do
-				if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and not meta._ShutdownCalled then
+				if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and meta._DirtySave[key] and meta._DataCache[key] and not meta._ShutdownCalled then
 					-- there is a dilemma about just checking dirty records or just saved all
 					-- because if record.Data was modified without getting called by Save(), it won't triggers record to be dirty
 					-- whether to stick with dirty record autosave or record.Data brute-forcing autosave system... I don't know, still thinking
 					-- because I was also allow developers to modificate record.Key, but what if they're forgetting to call Save()?
 					-- so, that's why i need to consider this all on this autosave.
-					-- candidate that will replace this:
 					
-					-- `if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and meta._DirtySave[key] and not meta._ShutdownCalled then`
-					-- implemented with "_DirtySave[key]" clearly
+					-- now, tomorrow. i have decided that record.Data just assigned as read-only field where to access the data, meanwhile Write() or Save() is the only that can change/modify data
 					table.insert(dirty, info.Record)					
 					meta._AutosaveTimestamp[key].Timestamp = workspace:GetServerTimeNow() -- Reset the timestamp to prevent multiple saves, and must be the newest timestamp
 				end
@@ -1597,7 +1613,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 						
 		-- Apply the data to the cache
-		record.Data = data -- Data is now ready to be used
+		record.Data = deepfreeze(data) -- Data is now ready to be used, as read-only table
 		record.CurrentState = "Ready" -- Current state is ready to do things
 		record.Version = meta._UnreadyData[record.Key].__version or 0 -- Set the version of this record to real data version
 		
@@ -1761,7 +1777,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 	end
 	
-	-- Reluctantly saving current data from the modification of .Data from record, but you can use another data to save
+	-- Saving the custom data or edited-whole data into record, as waiting for its queue turn
 	-- Use SegmentIndex if you ever want to make cheaper data to save
 	-----------------------------------------------------------------------------------
 	-- Just remember, Save() didn't check the validations of the data before commit
@@ -1770,7 +1786,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- Because, when you tried to load and ready, but some datas are not valid, you can't obtain it
 	-- So, I would recommend you to use Write() when your data wants more secure, particularly to validates the data first before commit
 	-- Use Save() for manual control, but beware of what you did
-	function record:Save(Data: any?, SegmentIndex: number?)
+	function record:Save(Data: any, SegmentIndex: number?)
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
 		end
@@ -1807,14 +1823,13 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 				
 		meta._LockSessions:Do(record.Key, function()
-			local commitedData = Data or record.Data
 			if SegmentIndex then
-				data.__data[SegmentIndex] = commitedData
+				data.__data[SegmentIndex] = Data
 			else
-				data.__data = commitedData
+				data.__data = Data
 			end		
 			
-			record.Data = deepclone(data.__data)
+			record.Data = deepfreeze(data.__data)
 			meta._DirtySave[record.Key] = true
 		end)
 		push_compression_timer(meta, record)
@@ -1893,7 +1908,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 
 			data.__data = customData
-			record.Data = deepclone(customData)
+			record.Data = deepfreeze(customData)
 			
 			meta._DirtySave[record.Key] = true
 		end)
@@ -1919,7 +1934,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- Use it for immediate saving operations, ex. Player Leaving or Manual Trading
 	-- However, Standby() has given you a service for saving data automatically, with this ForceSave()
 	-- But you can use it anyway, the explicit data commiting is still in Mutex lock to prevent race conditions
-	function record:ForceSave(Data: any?, SegmentIndex: number?)
+	function record:ForceSave(Data: any, SegmentIndex: number?)
 		if not meta.Enabled or not UDataComponent.Enabled then
 			return false
 		end
@@ -1959,21 +1974,20 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record._SaveProgress = false
 			return false
 		end
+		record.CurrentState = "Running"
 		
 		local thisOwnerId = record.Owner and record.Owner.UserId or 0
 		
 		local isSuccess = false
-		meta._LockSessions:Do(record.Key, function()
-			local commitedData = Data or record.Data
-			
+		meta._LockSessions:Do(record.Key, function()			
 			if SegmentIndex then
-				data.__data[SegmentIndex] = commitedData
+				data.__data[SegmentIndex] = Data
 			else
-				data.__data = commitedData
+				data.__data = Data
 			end		
 			
 			local clonedRecord = deepclone(data)
-			record.Data = deepclone(clonedRecord.__data)
+			record.Data = deepfreeze(clonedRecord.__data)
 						
 			local compressed, flag
 			local found = false
@@ -2078,6 +2092,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 		end
 		record._SaveProgress = false
+		record.CurrentState = "Running"
 
 		return isSuccess
 	end
@@ -2116,6 +2131,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record._SaveProgress = false
 			return false
 		end
+		record.CurrentState = "Running"
 		
 		local thisOwnerId = record.Owner and record.Owner.UserId or 0
 		local isSuccess = false
@@ -2139,7 +2155,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 			
 			data.__data = clonedData
-			record.Data = deepclone(clonedData)
+			record.Data = deepfreeze(clonedData)
 			
 			local compressed, flag
 			local found = false
@@ -2244,6 +2260,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 		end
 		record._SaveProgress = false
+		record.CurrentState = "Running"
 
 		return isSuccess
 	end
