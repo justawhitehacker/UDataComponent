@@ -1651,9 +1651,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-						
+		
+		local ready = deepclone(data) -- Data is now ready to be used, as read-only table
+		
 		-- Apply the data to the cache
-		record.Data = deepfreeze(data) -- Data is now ready to be used, as read-only table
+		record.Data = deepfreeze(ready) -- Data is now ready to be used, as read-only table
 		record.CurrentState = "Ready" -- Current state is ready to do things
 		record.Version = meta._UnreadyData[record.Key].__version or 0 -- Set the version of this record to real data version
 		
