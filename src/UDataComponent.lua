@@ -464,7 +464,7 @@ export type UDCEvent = {
 	OnUnarchived: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is finally unarchived, happened by Unarchive()
 	
-	OnWrite: (UDCRecord: UDCRecord, Callback: (Key: string | number, OldData: any, NewData: any) -> any) -> UDCEventConnector,
+	OnWrite: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the data of the record has been modified before commited, actually happened by Write() or Save() or Force*()
 	
 	OnBroadcastSent: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
@@ -628,7 +628,11 @@ local function dispatch(meta : __UDCInfo_Internal, record : UDCRecord, eventName
 	end
 	
 	local args = table.pack(...)
-	local dynamicCallbacks = meta._UDataComponentDynamicCallbacks[eventName]
+	local ucallbacks = meta._UDataComponentDynamicCallbacks[eventName]
+	if not ucallbacks then return end
+	
+	local dynamicCallbacks = ucallbacks[record.Key]
+	if not dynamicCallbacks then return end
 
 	if dynamicCallbacks then
 		local matched = {}
@@ -1681,7 +1685,7 @@ local function create_event_class(meta : __UDCInfo_Internal, record : UDCRecord)
 			return coroutine.yield()
 		end
 		
-		return connectors
+		return connectors :: UDCEventConnector
 	end
 	
 	function events:OnReleased(Callback: (Key: string | number) -> any)
@@ -1744,7 +1748,7 @@ local function create_event_class(meta : __UDCInfo_Internal, record : UDCRecord)
 		return registerCallback("OnOwnershipExpired", Callback)
 	end
 	
-	return events
+	return events :: UDCEvent
 end
 
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
@@ -1756,7 +1760,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.Key = key -- This is the key of the record
 	record.Owner = owner -- This is the owner of the record
 	record.IsArchived = false -- This is to indicate if the record is archived or not
-	record.Event = nil -- Utils of events for this record
+	record.Event = create_event_class(meta, record) -- Utils of events for this record
 	record.Validation = create_validation_class(meta, record) -- Utils to create validation for this record
 	record.Swap = nil -- Utils to swap data with other record
 	record.Messaging = nil -- Utils to Broadcasting to other servers
