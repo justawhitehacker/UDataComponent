@@ -628,22 +628,6 @@ local function dispatch(meta : __UDCInfo_Internal, record : UDCRecord, eventName
 	end
 	
 	local args = table.pack(...)
-	local success, err = pcall(function()
-		local callbacks = meta._UDataComponentCallbacks[eventName]
-		
-		if callbacks then
-			local currentCallback = callbacks[record.Key]
-			if not currentCallback then return end
-			
-			task.spawn(currentCallback, record.Key, table.unpack(args))
-		end
-	end)
-	
-	if not success then
-		local format = string.format("[UDataComponent-InternalErr(%s-%s)]: %s", record.Key, eventName, err)
-		warn(format)
-	end
-	
 	local dynamicCallbacks = meta._UDataComponentDynamicCallbacks[eventName]
 
 	if dynamicCallbacks then
@@ -656,7 +640,7 @@ local function dispatch(meta : __UDCInfo_Internal, record : UDCRecord, eventName
 			task.spawn(function()
 				local success, result = pcall(cb, record.Key, table.unpack(args))
 				if not success then
-					local format = string.format("[UDataComponent-InternalErr(%s-%s)]: %s", record.Key, eventName, err)
+					local format = string.format("[UDataComponent-InternalErr(%s-%s)]: %s", record.Key, eventName, result)
 					warn(format)
 				end
 			end)
@@ -2998,29 +2982,6 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._TrackedValidations = {} -- { [Key] = { Predicate = ValidationFunction, Penetration = number or 1 } }
 	self._TrackedSchemas = {} -- { [Key] = { Schema = string, Penetration = number or 1 } }
 	self._TrackedClamps = {} -- { [Key] = { Min = number?, Max = number?, Penetration = number or 1 } }
-
-	self._UDataComponentCallbacks = {
-		OnReleased = {},
-		OnReady = {},
-		OnSaved = {},
-		OnLoaded = {},
-		OnStandby = {},
-		OnAutoSaved = {},
-		OnArchived = {},
-		OnUnarchived = {},
-		
-		OnWrite = {},
-		
-		OnBroadcastSent = {},
-		OnBroadcastReceived = {},
-		
-		OnRecordBroadcastReceived = {},
-		
-		OnError = {},
-		OnDataFiltered = {},
-		
-		OnOwnershipExpired = {}
-	}
 
 	self._UDataComponentDynamicCallbacks = {
 		OnReleased = {},
