@@ -507,15 +507,18 @@ end
 -- for deepcloning then deepfreezing table
 local function deepfreeze(tab)
 	if typeof(tab) ~= "table" then
-		return
+		return tab
 	end
 	
-	local tb = {}
-	for k, v in pairs(tab) do
-		tb[k] = deepfreeze(v)
-	end
-	
+	local tb = deepclone(tab)
 	table.freeze(tb)
+
+	for k, v in pairs(tab) do
+		if typeof(v) == "table" then
+			tb[k] = deepfreeze(v)
+		end
+	end
+	
 	return tb
 end
 
@@ -1138,8 +1141,8 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 	end)
 end
 
--- just to remember, autosave in UDC saving the current record.Data modification
--- so, instead just using Write() to modificate the data, and Save() to save record.Data or custom data immediately, record.Data could be handled by autosave itself
+-- just to remember, autosave in UDC saving the dirty record that still in queue
+-- so, when your Save/Write request was still in queue and the record is dirty, but autosave interval hits, it will automatically saved seperatedly instead
 local function run_autosave(meta : __UDCInfo_Internal)
 	if meta._AutosaveCalled or meta._ShutdownCalled then return end
 	meta._AutosaveCalled = true
@@ -1154,13 +1157,6 @@ local function run_autosave(meta : __UDCInfo_Internal)
 			local dirty = {}
 			for key, info in pairs(meta._AutosaveTimestamp) do
 				if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and meta._DirtySave[key] and meta._DataCache[key] and not meta._ShutdownCalled then
-					-- there is a dilemma about just checking dirty records or just saved all
-					-- because if record.Data was modified without getting called by Save(), it won't triggers record to be dirty
-					-- whether to stick with dirty record autosave or record.Data brute-forcing autosave system... I don't know, still thinking
-					-- because I was also allow developers to modificate record.Key, but what if they're forgetting to call Save()?
-					-- so, that's why i need to consider this all on this autosave.
-					
-					-- now, tomorrow. i have decided that record.Data just assigned as read-only field where to access the data, meanwhile Write() or Save() is the only that can change/modify data
 					table.insert(dirty, info.Record)					
 					meta._AutosaveTimestamp[key].Timestamp = workspace:GetServerTimeNow() -- Reset the timestamp to prevent multiple saves, and must be the newest timestamp
 				end
@@ -1289,8 +1285,12 @@ local function are_schemas_valid(meta : __UDCInfo_Internal, record : UDCRecord, 
 		local schema = info.Schema
 		local penetration = info.Penetration
 		
-		if not schema or not penetration then
-			continue -- just pass, if there are not informations about these from validators
+		if not schema then
+			continue
+		end
+		
+		if not penetration then
+			penetration = 1 -- default penetration
 		end
 		
 		local element = find_element(data, key, penetration) -- finding elements through nested ways
@@ -1325,7 +1325,7 @@ local function clamp_values(meta : __UDCInfo_Internal, record : UDCRecord, data 
 		local penetration = info.Penetration
 		
 		if not penetration then
-			continue -- just pass, if there is no these elements in validator
+			penetration = 1 -- default penetration
 		end
 		
 		local element = find_element(data, key, penetration)
@@ -1366,8 +1366,12 @@ local function are_datas_valid(meta : __UDCInfo_Internal, record : UDCRecord, da
 		local predicate = info.Predicate
 		local penetration = info.Penetration
 		
-		if not predicate or not penetration then
+		if not predicate then
 			continue -- just pass, if there's no these elements in validator
+		end
+		
+		if not penetration then
+			penetration = 1 -- default penetration
 		end
 		
 		local element = find_element(data, key, penetration)
@@ -1665,7 +1669,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			return false
 		end
 		
-		if record.Data == nil or meta._DataCache[record.Key] == nil then
+		if meta._DataCache[record.Key] == nil then
 			return false
 		end
 		
@@ -1701,12 +1705,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record._SleepProgress = false
 			return false
 		end
-		
-		if record.Data == nil then
-			record._SleepProgress = false
-			return false
-		end
-		
+
 		local now = workspace:GetServerTimeNow()
 		local dataCache = meta._DataCache[record.Key]
 		if not dataCache or not dataCache.__bounds then
@@ -1825,11 +1824,6 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record._SaveProgress = false
 			return false
 		end
-				
-		if record.Data == nil then
-			record._SaveProgress = false
-			return false
-		end
 		
 		if Data == nil then
 			record._SaveProgress = false
@@ -1900,7 +1894,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		local success
 		meta._LockSessions:Do(record.Key, function()
 			local customData = deepclone(data.__data) -- use deep-cloned table, so that the main data can't be changed, to prevent some "malicious" or "accident" data modifications
-			success = pcall(WritingFunction, customData) -- this function returns nothing, but change the data safely
+			success = pcall(WritingFunction, data.__data) -- this function returns nothing, but change the data safely
 			
 			if not success then
 				return
@@ -1980,11 +1974,6 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 
 		local data = meta._DataCache[record.Key]
 		if not data or not data.__data then
-			record._SaveProgress = false
-			return false
-		end
-
-		if record.Data == nil then
 			record._SaveProgress = false
 			return false
 		end
@@ -2146,7 +2135,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		local data = meta._DataCache[record.Key]
-		if not data or record.Data == nil then
+		if not data then
 			record._SaveProgress = false
 			return false
 		end
@@ -2330,7 +2319,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		record._ArchivingProgress = true
 		
 		local data = meta._DataCache[record.Key]
-		if not data or record.Data == nil then
+		if not data then
 			record._ArchivingProgress = false
 			return false
 		end
