@@ -495,10 +495,6 @@ local function deepclone(tab, seen)
 	end
 	local newTab = seen or {}
 	
-	if newTab[tab] then
-		return newTab[tab]
-	end
-	
 	for k, v in pairs(tab) do
 		if newTab[k] == nil then
 			newTab[k] = v
@@ -513,40 +509,24 @@ end
 -- for deepcloning then deepfreezing table
 local function deepfreeze(tab, frozen)
 	frozen = frozen or {}
-	
-	if frozen[tab] or table.isfrozen(tab) then
+	if typeof(tab) ~= "table" then
 		return tab
 	end
 	
-	frozen[tab] = true
-	table.freeze(tab)
+	local copy = {}
+	frozen[tab] = copy
 	
-	for _, v in pairs(tab) do
+	for k, v in pairs(tab) do
 		if typeof(v) == "table" then
-			deepfreeze(v, frozen)
+			copy[k] = deepfreeze(v, frozen)
+		else
+			copy[k] = v
 		end
 	end
 	
-	return tab
+	table.freeze(copy)
+	return copy
 end
-
--- for deepcloning then deepfreezing table
---local function deepfreeze(tab)
---	if typeof(tab) ~= "table" then
---		return tab
---	end
-	
---	local tb = deepclone(tab)
-
---	for k, v in pairs(tab) do
---		if typeof(v) == "table" then
---			tb[k] = deepfreeze(v)
---		end
---	end
-	
---	table.freeze(tb)
---	return tb
---end
 
 -- to call event
 local function dispatch(record, eventName, ...)
@@ -1116,7 +1096,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 		for i, info in ipairs(meta._StandbyRegistry) do
 			local sameOwner = info.Record and info.Record.Owner and info.Record.Owner.UserId == userId
 			
-			if sameOwner and meta._DirtySave[info.Key] then
+			if sameOwner then
 				write_to_wal_or_fs(meta, info.Record, now)
 				pcall(info.Record.Sleep, info.Record)
 				
@@ -1130,36 +1110,51 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 		meta._ShutdownCalled = true
 		
 		local dirty = {}
+		local normals = {}
 		for _, info in ipairs(meta._StandbyRegistry) do
-			if info and info.Record and info.Key and meta._DataCache[info.Key] and meta._DirtySave[info.Key] then
-				table.insert(dirty, info)
+			if info and info.Record and info.Key and meta._DataCache[info.Key] then
+				if meta._DirtySave[info.Key] then
+					table.insert(dirty, info)
+					continue
+				end
+				
+				table.insert(normals, info)
 			end
 		end
 		meta._StandbyRegistry = {}
 		
-		local working = { Workers = 0, Saved = 0 }
+		local working = { Workers = 0 }
 		
 		local now = workspace:GetServerTimeNow()
 		local stopped = false
 		
-		while #dirty > 0 and not stopped do
+		while (#dirty > 0 or #normals > 0) and not stopped do
 			if workspace:GetServerTimeNow() - now > meta.ShutdownSecondsToken then
 				stopped = true
 				break
 			end
 						
-			while #dirty > 0 and working.Workers < meta.MaxStandbyWorkers do
+			while (#dirty > 0 or #normals > 0) and working.Workers < meta.MaxStandbyWorkers do
 				local updateBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
 				if updateBudget < 1 then break end
 				
 				local item = table.remove(dirty, 1)
+				if item then
+					working.Workers += 1
+					task.spawn(function()
+						pcall(write_to_wal_or_fs, meta, item.Record, now)
+						working.Workers -= 1
+					end)
+				end
 				
-				working.Workers += 1
-				task.spawn(function()
-					write_to_wal_or_fs(meta, item.Record, now)
-					working.Workers -= 1
-					working.Saved += 1
-				end)
+				local normal = table.remove(normals, 1)
+				if normal then
+					working.Workers += 1
+					task.spawn(function()
+						pcall(normal.Record.Sleep, normal.Record)
+						working.Workers -= 1
+					end)
+				end
 			end
 			
 			task.wait()
@@ -1196,9 +1191,11 @@ local function run_autosave(meta : __UDCInfo_Internal)
 				local cache = meta._DataCache[record.Key]
 				if not cache then continue end
 				
+				local data = deepclone(cache.__data)
+
 				meta._CurrentAutoSaveWorkers += 1
-				task.spawn(function()
-					pcall(record.ForceSave, record, cache)
+				task.spawn(function()	
+					pcall(record.ForceSave, record, data)
 					meta._CurrentAutoSaveWorkers -= 1
 				end)
 			end
