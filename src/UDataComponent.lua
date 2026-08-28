@@ -447,7 +447,41 @@ export type UDCRecord = {
 }
 
 export type UDCEvent = {
+	OnReleased: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the record is released, actually happened by Sleep() call or Standby() triggers
+	OnReady: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the record is ready to be used, actually happened by Ready()
+	OnSaved: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the record is saved, actually happened when the data of record finally commited to datastore
+	OnLoaded: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the record is loaded, actually happened by Awake()
+	OnStandby: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the record is on standby action, actually happened by Standby()
+	OnAutoSaved: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the record is being commited automatically by autosave, happened every autosave interval kicks in
+	OnArchived: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the record is being detached or archived or removed, happened by Detach()
+	OnUnarchived: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the record is finally unarchived, happened by Unarchive()
 	
+	OnWrite: (UDCRecord: UDCRecord, Callback: (Key: string | number, OldData: any, NewData: any) -> any) -> (),
+	-- happened when the data of the record has been modified before commited, actually happened by Write() or Save() or Force*()
+	
+	OnBroadcastSent: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the record is sent to other server with messaging, actually happened by BroadcastCurrentData()
+	OnBroadcastReceived: (UDCRecord: UDCRecord, Callback: (Key: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> (),
+	-- happened when the record is received from other server by messaging, this is where you can receive the broadcast packet from a broadcaster server
+	
+	OnRecordBroadcastReceived: (UDCRecord: UDCRecord, Callback: (Key: string | number, BroadcasterKey: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> (),
+	-- happened when a record broadcasting to another record in another server, this is where you can receive the record's broadcasting data
+	
+	OnError: (UDCRecord: UDCRecord, Callback: (Key: string | number, Error: string) -> any) -> (),
+	-- happened when the record is having error in message
+	OnDataFiltered: (UDCRecord: UDCRecord, Callback: (Key: string | number, FilteredData: string | number) -> any) -> (),
+	-- happened when the record is getting filtered by validation, happened when loaded or Write()
+	
+	OnOwnershipExpired: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	-- happened when the ownership of this record expired when preparing
 }
 
 export type UDCValidation = {
@@ -504,11 +538,26 @@ export type UDCSwap = {
 }
 
 export type UDCBroadcasting = {
+	BroadcastCurrentData: (UDCBroadcasting: UDCBroadcasting, OtherThings: any) -> boolean,
+	-- Global broadcasting the data to all servers
+	WaitForBroadcastPacket: (UDCBroadcasting: UDCBroadcasting, Timeout: number?) -> UDCBroadcastingPacket,
+	-- Waiting for global broadcast packet from other server
+	SendLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, OtherThings: any) -> boolean,
+	-- Sending local broadcast to other server that listening on the channel
+	ListenToLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
+	-- Listening for local broadcast from other server
+	SendBroadcastToRecord: (UDCBroadcasting: UDCBroadcasting, Key: string | number, OtherThings: any) -> boolean
+	-- Sending broadcast to specific record in other server
+}
+
+export type UDCBroadcastingPacket = {
 	
 }
 
 export type UDCEventConnector = {
-	
+	Wait: (self: UDCEventConnector) -> any,
+	Disconnect: (self: UDCEventConnector) -> (),
+	DisconnectAfterCalled: (self: UDCEventConnector) -> (),
 }
 
 export type UDCReadOnlyRecord = {
@@ -573,14 +622,56 @@ local function deepfreeze(tab, frozen)
 end
 
 -- to call event
-local function dispatch(record, eventName, ...)
-	local args = table.pack(...)
+local function dispatch(meta : __UDCInfo_Internal, record : UDCRecord, eventName : string, ...)
+	if not meta.CallbackEnabled then
+		return
+	end
 	
+	local args = table.pack(...)
+	local success, err = pcall(function()
+		local callbacks = meta._UDataComponentCallbacks[eventName]
+		
+		if callbacks then
+			local currentCallback = callbacks[record.Key]
+			if not currentCallback then return end
+			
+			task.spawn(currentCallback, record.Key, table.unpack(args))
+		end
+	end)
+	
+	if not success then
+		local format = string.format("[UDataComponent-InternalErr(%s-%s)]: %s", record.Key, eventName, err)
+		warn(format)
+	end
+	
+	local dynamicCallbacks = meta._UDataComponentDynamicCallbacks[eventName]
+
+	if dynamicCallbacks then
+		local matched = {}
+		for key, cb in pairs(dynamicCallbacks) do
+			table.insert(matched, cb)
+		end
+
+		for _, cb in pairs(matched) do
+			task.spawn(function()
+				local success, result = pcall(cb, record.Key, table.unpack(args))
+				if not success then
+					local format = string.format("[UDataComponent-InternalErr(%s-%s)]: %s", record.Key, eventName, err)
+					warn(format)
+				end
+			end)
+		end
+	end
 end
 
--- to call specific, OnDataError event, with message
-local function throw(record, message)
+-- to call specific, OnError event, with message
+local function throw(meta : __UDCInfo_Internal, record : UDCRecord, message : string)
+	if message == "" or not message then
+		message = "No message"
+	end
 	
+	local namespace = "[" .. meta.ErrorReasonNamespace .. "]: "
+	dispatch(meta, record, "OnError", namespace .. message)
 end
 
 -- to reconcile data, where the data will be reconciled with the blueprint
@@ -741,14 +832,16 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 		end)
 	end)
 	
+	local xresult = success and result
+	
 	-- Checking if the result is success and has a valid data, and WAL entry is existed
-	if success and result and entry then
+	if xresult and entry then
 		-- Remove the WAL entry after successfully commiting the data
 		pcall(function()  
 			meta._CurrentWALDataStore:RemoveAsync(record.Key)
 		end)
 	end
-
+	
 	return result
 end
 
@@ -761,6 +854,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	local dataCache = meta._DataCache[record.Key]
 	if not dataCache then 
 		record.CurrentState = "Ready"
+		throw(meta, record, "Data is not loaded yet to saving operation, please load the record first.")
 		return false 
 	end
 	
@@ -779,6 +873,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 
 			if not ok then
 				record.CurrentState = "Ready"
+				throw(meta, record, "Failed to compress the data of record when trying to save. Reason: " .. tostring(newCompressed))
 				return false
 			end
 
@@ -794,6 +889,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 		local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
 		if not ok then 
 			record.CurrentState = "Ready"
+			throw(meta, record, "Failed to compress the data of record when trying to save. Reason: " .. tostring(newCompressed))
 			return false 
 		end
 
@@ -858,6 +954,8 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 		if dirtySave then
 			meta._DirtySave[record.Key] = nil
 		end
+		
+		dispatch(meta, record, "OnSaved")
 	end
 	record.CurrentState = "Ready"
 	
@@ -867,6 +965,7 @@ end
 local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord, now : number)
 	local currentData = meta._DataCache[record.Key]
 	if not currentData then
+		throw(meta, record, "Data is not loaded yet to be saved automatically.")
 		return false
 	end
 	
@@ -887,13 +986,19 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 		else
 			local ok, newCompressed, newFlag = pcall(Compressor.TryToCompress, data, EMERGENCY_COMPRESSION_LEVEL, meta.CompressionThreshold)
 
-			if not ok then return false end
+			if not ok then 
+				throw(meta, record, "Failed to compress the data of record when trying to write the record in standby operation. Reason: " .. tostring(newCompressed))
+				return false 
+			end
 
 			compressed, flag = newCompressed, newFlag
 		end
 	else
 		local ok, newCompressed, newFlag = pcall(Compressor.TryToCompress, data, EMERGENCY_COMPRESSION_LEVEL, meta.CompressionThreshold)
-		if not ok then return false end
+		if not ok then 
+			throw(meta, record, "Failed to compress the data of record when trying to write the record in standby operation. Reason: " .. tostring(newCompressed))
+			return false 
+		end
 
 		compressed, flag = newCompressed, newFlag
 	end
@@ -965,6 +1070,7 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 			pcall(record.Sleep, record)
 		end
 		
+		dispatch(meta, record, "OnSaved")
 		record.CurrentState = "Asleep"
 	end
 	
@@ -973,6 +1079,7 @@ end
 
 local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
 	if not meta.BackupEnabled then
+		throw(meta, record, "Backup is disabled")
 		return nil
 	end
 	
@@ -985,7 +1092,10 @@ local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
 	
 	if success and result then
 		local lastData = result:GetCurrentPage()[1]
-		if lastData == nil then return nil end
+		if lastData == nil then 
+			throw(meta, record, "There is no backup data obtained, it seems the data is lost after 30 days or something...")
+			return nil 
+		end
 		
 		local ok, backupData = pcall(function()
 			return meta._CurrentDataStore:GetVersionAsync(record.Key, lastData.Version)
@@ -1026,6 +1136,7 @@ local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
 		end
 	end
 	
+	throw(meta, record, "Unable to get the backup of data")
 	return nil
 end
 
@@ -1050,6 +1161,7 @@ local function run_load_queue(meta : __UDCInfo_Internal)
 			end
 
 			if first.Meta and first.Meta.Owner and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
+				throw(meta, first.Meta, "Owner of this record left the game")
 				task.spawn(first.Thread, false, nil) -- Player left, cancel the load request
 				continue
 			end
@@ -1089,6 +1201,7 @@ local function run_save_queue(meta : __UDCInfo_Internal)
 			end
 			
 			if first.Meta and first.Meta.Owner and first.Meta.Key and not meta._DataCache[first.Meta.Key] and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
+				throw(meta, first.Meta, "Owner of this record left the game")
 				task.spawn(first.Thread, false) -- Data is already unloaded, cancel the save request
 				continue
 			end
@@ -1235,7 +1348,10 @@ local function run_autosave(meta : __UDCInfo_Internal)
 				if currentBudget <= 0 then break end
 				
 				local cache = meta._DataCache[record.Key]
-				if not cache then continue end
+				if not cache then 
+					throw(meta, record, "Record is not loaded to get autosaved by UDC, please load the record first.")
+					continue 
+				end
 				
 				local data = deepclone(cache.__data)
 
@@ -1371,6 +1487,7 @@ local function are_schemas_valid(meta : __UDCInfo_Internal, record : UDCRecord, 
 		end
 		
 		if typeof(element) ~= schema then
+			dispatch(meta, record, "OnFilteredData", key)
 			return false -- are invalid when there is even one data hasn't same type as validators
 		end
 	end
@@ -1409,7 +1526,7 @@ local function clamp_values(meta : __UDCInfo_Internal, record : UDCRecord, data 
 		elseif not min and max then filtered = math.min(element, max)
 		elseif min and max then filtered = math.clamp(element, min, max)
 		else 
-			continue -- if there is no min and max
+			filtered = element
 		end
 		
 		local success = change_element(data, key, filtered, penetration)
@@ -1451,6 +1568,7 @@ local function are_datas_valid(meta : __UDCInfo_Internal, record : UDCRecord, da
 		end
 		
 		if not predicate(element) then
+			dispatch(meta, record, "OnFilteredData", key)
 			return false -- if there is one data that is not valid or same as predicate, return false
 		end
 	end
@@ -1573,14 +1691,17 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- SUSPENDING (YIELDABLE), where Awake waits for dequeue session until the data is loaded
 	function record:Awake()
 		if meta._UnreadyData[record.Key] then
+			throw(meta, record, "Record is already awoken, it seems you're trying to awake the record twice. Just call Ready() instead to make the record ready to be used.")
 			return false
 		end
 		
 		if meta._AwakeProgress then
+			throw(meta, record, "Record is in progress to awake...")
 			return false
 		end
 		
 		if record.CurrentState ~= "Asleep" and record.CurrentState ~= "Sleeping" then
+			throw(meta, record, "Record is not in Asleep or Sleeping state, it seems you're trying to awake the record when it's already at different state.")
 			return false
 		end
 		meta._AwakeProgress = true
@@ -1592,10 +1713,14 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			record.CurrentState = "WakingUp"
 			meta._UnreadyData[record.Key] = result
 			
+			dispatch(meta, record, "OnLoaded")
+			
 			overallResult = true
-		elseif success and not result then
+		else 
 			record.CurrentState = "Sleeping"
 			meta._UnreadyData[record.Key] = nil
+			
+			throw(meta, record, "Failed to awake the record.")
 			
 			overallResult = false
 		end
@@ -1612,37 +1737,45 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	function record:Ready(FindingPlayerTimeout: number?)
 		FindingPlayerTimeout = FindingPlayerTimeout or 10
 		
-		local function penalty()
+		local function penalty(msg)
 			record._ReadyProgress = false
 			
 			record.CurrentState = "Sleeping"
 			meta._UnreadyData[record.Key] = nil
+			
+			throw(meta, record, msg)
 		end
 		
 		if not UDataComponent.IsAlive() then
+			throw(meta, record, "UDataComponent is not alive.")
 			return false
 		end
 				
 		if meta._ShutdownCalled then
+			throw(meta, record, "The server is progress to shutdown.")
 			return false
 		end
 				
 		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
 			return false
 		end
 						
 		-- Whether the data is already waking up or not, if not, maybe cannot ready or already running
 		if record.CurrentState ~= "WakingUp" then
+			throw(meta, record, "Record is current in Ready state, meaning the record has been loaded. You can't call Ready() twice or more.")
 			return false
 		end
 						
 		if record._ReadyProgress then
+			throw(meta, record, "Record is already in progress to ready...")
 			return false
 		end
 						
 		record._ReadyProgress = true
 		
 		if meta._DataCache[record.Key] ~= nil then
+			throw(meta, record, "Record is already ready.")
 			record.CurrentState = "Sleeping"
 			return false
 		end
@@ -1654,55 +1787,53 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		if not unready then
 			record._ReadyProgress = false
 			record.CurrentState = "Sleeping"
+			throw(meta, record, "Record is not waking up yet, make sure this record has called Awake() before preparing to get ready.")
 			return false
 		end		
 		
 		if meta._ActiveRecords[record.Key] then
-			penalty()
+			penalty("Record is already active and ready.")
 			return false
 		end
 						
 		-- Checking if the was archived or not
 		if record.IsArchived then
-			penalty()
+			penalty("Record is being archived in this session.")
 			return false
 		end
 						
 		-- Checking if essential elements of data are existing
 		if not unready.__version or not unready.__bounds or not unready.__data or not unready.__flag then
-			penalty()
+			penalty("Missing record's elements, internal error.")
 			return false
 		end
 						
 		-- Checking if bound elements in the data are existed
 		if not unready.__bounds or not unready.__bounds.id or not unready.__bounds.since or not unready.__bounds.serverid then
-			penalty()
+			penalty("Missing bounds, internal error.")
 			return false
 		end
 								
 		-- Checking if the data is owned by this server
 		if unready.__bounds.serverid ~= ServerId then
-			penalty()
+			penalty("This record is not being owned by this server, unable to get ready.")
 			return false
 		end
 						
 		-- Checking if the data is owned by this player
 		if record.Owner and record.Owner.UserId ~= unready.__bounds.id then
-			penalty()
+			penalty("This record is not belong to current owner, unable to get ready.")
 			return false
 		end
-		
-		print("Bounds 1")
 						
 		-- Checking if the data is still bound to this player
 		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
 		if now - unready.__bounds.since > timeout then
-			penalty()
+			penalty("Record binding is already expired for this owner, you should refresh the ownership expiration of this record.")
+			dispatch(meta, record, "OnOwnershipExpired")
 			return false
 		end
-		
-		print("Bounds 2")
-								
+										
 		-- Checking if player is still in the server
 		local playerFound = false
 		while record.Owner and not playerFound do
@@ -1711,7 +1842,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				playerFound = true
 				-- If timeout is set, then it's not ready yet
 			elseif workspace:GetServerTimeNow() - now > FindingPlayerTimeout then
-				penalty()
+				penalty("This record is not ready, the player is not found from this server.")
 				return false
 			else
 				task.wait(1)
@@ -1728,19 +1859,19 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		-- Checking if the data is successfully decompressed
 		if not success then
 			warn(data)
-			penalty()
+			penalty("This record is not ready, the data is corrupted.")
 			return false
 		end
 								
 		-- Checking if the data is a table
 		if typeof(data) ~= "table" then
-			penalty()
+			penalty("The data is not a table.")
 			return false
 		end
 						
 		-- Checking if the data size is not too big
 		if Compressor.GetSize(data) > meta.MaxDecompressedSize then
-			penalty()
+			penalty("Data's size of this record is full.")
 			return false
 		end
 						
@@ -1749,7 +1880,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		-- Checking if all datas are valid, even one invalid will case unready condition for strict checking
 		if not are_schemas_valid(meta, record, data) then
-			penalty()
+			penalty("The data is not valid after validation. Because a data is not having valid data-type.")
 			return false
 		end
 						
@@ -1758,7 +1889,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		-- Checking if datas are actually same as their own predicates
 		if not are_datas_valid(meta, record, data) then
-			penalty()
+			penalty("The data is not valid after validation. Because a data is not valid to operate in a predicate.")
 			return false
 		end
 				
@@ -1778,45 +1909,60 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		record._ReadyProgress = false
 		
+		dispatch(meta, record, "OnReady")
+		
 		return true
 	end
 	
 	function record:Standby()
 		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is disabled.")
 			return false
 		end
 		
 		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is not ready to standby.")
 			return false
 		end
 		
 		if record._CurrentlyStandby then
+			throw(meta, record, "This record is already in standby.")
 			return false
 		end
 		
 		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
 			return false
 		end
 		
 		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
 			return false
 		end
 		
 		if record._SaveProgress then
+			throw(meta, record, "This record is in save progress, unable to override current record's state process.")
 			return false
 		end
 		
 		if meta._DataCache[record.Key] == nil then
+			throw(meta, record, "It seems the record hadn't been loaded yet, unable to standby.")
 			return false
 		end
 		
 		local success = add_standby_record(meta, record)
+		
+		if success then
+			dispatch(meta, record, "OnStandby")
+		end
+		
 		return success
 	end
 	
 	-- Releasing the data from session, where this means this record has been fell asleep and cannot use the data anymore, unless you call Awake() to wake it up again
 	function record:Sleep()
 		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
 			return false
 		end
 		
@@ -1825,14 +1971,17 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
 			return false
 		end
 		
 		if record._SaveProgress then
+			throw(meta, record, "This record is in save progress, unable to override current record's state process.")
 			return false
 		end
 		
 		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
 			return false
 		end
 		
@@ -1840,6 +1989,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		if record.CurrentState ~= "Ready" then
 			record._SleepProgress = false
+			throw(meta, record, "This record is currently not ready, unable to get sleep once.")
 			return false
 		end
 
@@ -1847,6 +1997,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		local dataCache = meta._DataCache[record.Key]
 		if not dataCache or not dataCache.__bounds then
 			record._SleepProgress = false
+			throw(meta, record, "It seems this record hadn't been loaded yet, please load to sleep.")
 			return false
 		end
 		
@@ -1900,9 +2051,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				table.remove(meta._StandbyRegistry, find)
 			end
 			
+			dispatch(meta, record, "OnReleased")
 			return true
 		end
 		
+		throw(meta, record, "Failed to release the record.")
 		return false
 	end
 	
@@ -1933,6 +2086,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- Use Save() for manual control, but beware of what you did
 	function record:Save(Data: any, SegmentIndex: number?)
 		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled")
 			return false
 		end
 		
@@ -1942,31 +2096,39 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		record._SaveProgress = true
 				
 		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
 			record._SaveProgress = false
 			return false
 		end
 				
 		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
 			record._SaveProgress = false
 			return false
 		end
 				
 		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do Save() operations. Please call Ready()")
 			record._SaveProgress = false
 			return false
 		end
 				
 		local data = meta._DataCache[record.Key]
 		if not data or not data.__data then
+			throw(meta, record, "The data of this record is not loaded.")
 			record._SaveProgress = false
 			return false
 		end
 		
 		if Data == nil then
+			throw(meta, record, "Data parameter in Save() is nil")
 			record._SaveProgress = false
 			return false
 		end
-				
+		
+		local oldData = deepclone(data.__data)
+		local newData
+		
 		meta._LockSessions:Do(record.Key, function()
 			if SegmentIndex then
 				data.__data[SegmentIndex] = Data
@@ -1974,6 +2136,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				data.__data = Data
 			end		
 			
+			newData = deepclone(data.__data)			
 			record.Data = deepfreeze(data.__data)
 			meta._DirtySave[record.Key] = true
 		end)
@@ -1983,9 +2146,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		record._SaveProgress = false
 		if success then
+			dispatch(meta, record, "OnWrite", oldData, newData)
 			return true
 		end
-				
+		
+		throw(meta, record, "Failed to push data to save in this record.")
 		return false
 	end
 	
@@ -1993,11 +2158,14 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- Where Write() allows you to modificate the data safely with validation checking and compression operations
 	function record:Write(WritingFunction: (CurrentData: any) -> ())
 		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled")
 			return false
 		end
 		
 		local now = workspace:GetServerTimeNow()
 		if meta._WriteTimestamp[record.Key] and now - meta._WriteTimestamp[record.Key] < meta.DataWritingCooldown then
+			-- dont give warning in this session
+			-- this is just a safety step
 			return false
 		end
 		meta._WriteTimestamp[record.Key] = now
@@ -2008,28 +2176,34 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		record._SaveProgress = true
 		
 		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
 			record._SaveProgress = false
 			return false
 		end
 		
 		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
 			record._SaveProgress = false
 			return false
 		end
 		
 		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do Write() operations. Please call Ready()")
 			record._SaveProgress = false
 			return false
 		end
 		
 		local data = meta._DataCache[record.Key]
 		if not data or not data.__data then
+			throw(meta, record, "Data of this record is not loaded yet.")
 			record._SaveProgress = false
 			return false
 		end
 		
-		local success
+		local success 
 		local customData = deepclone(data.__data) -- use deep-cloned table, so that the main data can't be changed, to prevent some "malicious" or "accident" data modifications
+		local oldData = deepclone(data.__data)
+		local newData
 		meta._LockSessions:Do(record.Key, function()
 			success = pcall(WritingFunction, customData) -- this function returns nothing, but change the data safely
 			
@@ -2053,12 +2227,14 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 
 			data.__data = customData
+			newData = deepclone(customData)
 			record.Data = deepfreeze(customData)
 			
 			meta._DirtySave[record.Key] = true
 		end)
 		
 		if not success then
+			throw(meta, record, "Something error happened when writing data.")
 			record._SaveProgress = false
 			return false
 		end
@@ -2069,6 +2245,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		record._SaveProgress = false
 		if success then
+			dispatch(meta, record, "OnWrite", oldData, newData)
 			return true
 		end
 		
@@ -2081,6 +2258,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- But you can use it anyway, the explicit data commiting is still in Mutex lock to prevent race conditions
 	function record:ForceSave(Data: any, SegmentIndex: number?)
 		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
 			return false
 		end
 		
@@ -2095,33 +2273,41 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		record._SaveProgress = true
 
 		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
 			record._SaveProgress = false
 			return false
 		end
 
 		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
 			record._SaveProgress = false
 			return false
 		end
 
 		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do ForceSave() operations. Please call Ready()")
 			record._SaveProgress = false
 			return false
 		end
 
 		local data = meta._DataCache[record.Key]
 		if not data or not data.__data then
+			throw(meta, record, "Data of this record is not loaded yet.")
 			record._SaveProgress = false
 			return false
 		end
 		
 		if Data == nil then
+			throw(meta, record, "Data parameter in ForceSave() is nil")
 			record._SaveProgress = false
 			return false
 		end
 		record.CurrentState = "Running"
 		
 		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+		
+		local oldData = deepclone(data.__data)
+		local newData
 		
 		local isSuccess = false
 		meta._LockSessions:Do(record.Key, function()			
@@ -2132,6 +2318,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end		
 			
 			local clonedRecord = deepclone(data)
+			
+			newData = deepclone(data.__data)
 			record.Data = deepfreeze(data.__data)
 						
 			local compressed, flag
@@ -2145,7 +2333,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				else
 					local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedRecord.__data)
 
-					if not ok then return false end
+					if not ok then 
+						throw(meta, record, "Failed to compare and compress the data in record.")
+						return false 
+					end
 
 					compressed, flag = newCompressed, newFlag
 
@@ -2157,7 +2348,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				end
 			else
 				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedRecord.__data)
-				if not ok then return false end
+				if not ok then 
+					throw(meta, record, "Failed to compare and compress the data in record.")
+					return false 
+				end
 
 				compressed, flag = newCompressed, newFlag
 
@@ -2212,6 +2406,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			isSuccess = success and result
 		end)
 		
+		record._SaveProgress = false
+		record.CurrentState = "Ready"
 		if isSuccess then
 			local walSuccess, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
 			
@@ -2235,15 +2431,19 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			if dirty then
 				meta._DirtySave[record.Key] = nil
 			end
+			
+			dispatch(meta, record, "OnWrite", oldData, newData)
+			
+			return true
 		end
-		record._SaveProgress = false
-		record.CurrentState = "Ready"
-
-		return isSuccess
+		
+		throw(meta, record, "Failed to force save the data in record.")
+		return false
 	end
 	
 	function record:ForceWrite(WritingFunction: (CurrentData: any) -> ())
 		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
 			return false
 		end
 		
@@ -2253,6 +2453,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		 
 		local now = workspace:GetServerTimeNow()
 		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do ForceWrite() operations. Please call Ready()")
 			return false
 		end
 		
@@ -2262,17 +2463,20 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		record._SaveProgress = true
 		
 		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
 			record._SaveProgress = false
 			return false
 		end
 		
 		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
 			record._SaveProgress = false
 			return false
 		end
 		
 		local data = meta._DataCache[record.Key]
-		if not data then
+		if not data or not data.__data then
+			throw(meta, record, "Data of this record is not loaded yet.")
 			record._SaveProgress = false
 			return false
 		end
@@ -2282,11 +2486,16 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		local clonedRecord = deepclone(data)
 		local clonedData = deepclone(clonedRecord.__data)
+		
+		local oldData = deepclone(data.__data)
+		local newData
+		
 		local isSuccess = false
 		meta._LockSessions:Do(record.Key, function()
 			local success = pcall(WritingFunction, clonedData)
 
 			if not success then
+				throw(meta, record, "Failed to write the data in record.")
 				return false
 			end
 
@@ -2301,6 +2510,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 			
 			data.__data = clonedData
+			newData = deepclone(clonedData)
 			record.Data = deepfreeze(clonedData)
 			
 			local compressed, flag
@@ -2314,7 +2524,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				else
 					local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedData)
 
-					if not ok then return false end
+					if not ok then 
+						throw(meta, record, "Failed to compare and compress the data in record.")
+						return false 
+					end
 
 					compressed, flag = newCompressed, newFlag
 
@@ -2326,7 +2539,10 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 				end
 			else
 				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedData)
-				if not ok then return false end
+				if not ok then 
+					throw(meta, record, "Failed to compare and compress the data in record.")
+					return false 
+				end
 
 				compressed, flag = newCompressed, newFlag
 
@@ -2381,6 +2597,9 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			isSuccess = success and result
 		end)
 		
+		record._SaveProgress = false
+		record.CurrentState = "Ready"
+		
 		if isSuccess then
 			local walSuccess, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
 
@@ -2404,11 +2623,13 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			if dirty then
 				meta._DirtySave[record.Key] = nil
 			end
+			
+			dispatch(meta, record, "OnWrite", oldData, newData)
+			return true
 		end
-		record._SaveProgress = false
-		record.CurrentState = "Ready"
-
-		return isSuccess
+		
+		throw(meta, record, "Failed to write the data of record.")
+		return false
 	end
 	
 	-- Removing the record of this player
@@ -2419,6 +2640,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- 
 	function record:Detach()
 		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
 			return false
 		end
 		
@@ -2428,36 +2650,44 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		
 		local now = workspace:GetServerTimeNow()
 		if not meta.ArchivationEnabled then
+			throw(meta, record, "Archivation is not enabled.")
 			return false
 		end
 		
 		if meta.StrictlyUnallowDetaching then
+			throw(meta, record, "Detaching is not allowed in this mode.")
 			return false
 		end
 		
 		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do Detach() operations. Please call Ready()")
 			return false
 		end
 		
 		if record.CurrentState == "Died" then
+			throw(meta, record, "This record is currently died. You can't do any operations on this record.")
 			return false
 		end
 		
 		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
 			return false
 		end
 		
 		if record._SaveProgress then
+			throw(meta, record, "This record is in save progress, unable to override current record's state process.")
 			return false
 		end
 		
 		if record._ArchivingProgress then
+			throw(meta, record, "This record is in archiving progress, unable to override current record's state process.")
 			return false
 		end
 		record._ArchivingProgress = true
 		
 		local data = meta._DataCache[record.Key]
 		if not data then
+			throw(meta, record, "This record is not loaded yet.")
 			record._ArchivingProgress = false
 			return false
 		end
@@ -2474,6 +2704,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end)
 		
 		if not success then
+			throw(meta, record, "Failed to remove data from data store. " .. tostring(result))
 			record._ArchivingProgress = false
 			return false
 		end
@@ -2546,6 +2777,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 							table.remove(meta._StandbyRegistry, find)
 						end
 						
+						dispatch(meta, record, "OnArchived")
 						return true
 					end
 				end
@@ -2554,37 +2786,45 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 		end
 		record._ArchivingProgress = false
+		throw(meta, record, "Fatal error while trying to archive the record.")
 
 		return false
 	end
 	
 	function record:Unarchive()
 		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
 			return false
 		end
 		
 		local now = workspace:GetServerTimeNow()
 		if not meta.ArchivationEnabled then
+			throw(meta, record, "Archivation is not enabled.")
 			return false
 		end
 		
 		if record.CurrentState ~= "Asleep" and record.CurrentState ~= "Died" then
+			throw(meta, record, "Record is not currently asleep or died.")
 			return false
 		end
 		
 		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
 			return false
 		end
 
 		if record._SaveProgress then
+			throw(meta, record, "This record is in save progress, unable to override current record's state process.")
 			return false
 		end
 
 		if record._ArchivingProgress then
+			throw(meta, record, "This record is in archiving progress, unable to override current record's state process.")
 			return false
 		end
 		
 		if record._UnarchivingProgress then
+			throw(meta, record, "This record is in unarchiving progress, unable to override current record's state process.")
 			return false
 		end
 		record._UnarchivingProgress = true
@@ -2594,6 +2834,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end)
 		
 		if not success then
+			throw(meta, record, "Failed to get archived record from data store. " .. tostring(unarchivedData))
 			record._UnarchivingProgress = false
 			return false
 		end
@@ -2635,6 +2876,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 							meta._CurrentArchivedDataStore:RemoveAsync(record.Key)
 						end)
 						
+						dispatch(meta, record, "OnUnarchived")
 						return true
 					end
 				end
@@ -2643,6 +2885,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end
 		end
 		record._UnarchivingProgress = false
+		throw(meta, record, "Failed to unarchive data.")
 		
 		return false
 	end
@@ -2752,59 +2995,54 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._CurrentSaveWorkers = 0
 	self._CurrentAutoSaveWorkers = 0
 
-	self._TrackedValidations = {} -- { [Key] = { Member = ValidationFunction, ... } }
-	self._TrackedSchemas = {} -- { [Key] = { Member = ValidationFunction, ... } }
-	self._TrackedClamps = {} -- { [Key] = { Member = ValidationFunction, ... } }
+	self._TrackedValidations = {} -- { [Key] = { Predicate = ValidationFunction, Penetration = number or 1 } }
+	self._TrackedSchemas = {} -- { [Key] = { Schema = string, Penetration = number or 1 } }
+	self._TrackedClamps = {} -- { [Key] = { Min = number?, Max = number?, Penetration = number or 1 } }
 
 	self._UDataComponentCallbacks = {
-		OnReady = {},
-		OnDataLoaded = {},
-		OnDataSaved = {},
-		OnDataArchived = {},
-		OnDataUnarchived = {},
-		OnDataRecovery = {},
-		OnDataCached = {},
-		OnDataRemoved = {},
-		OnDataBinding = {},
-		OnDataUnbinding = {},
-		OnDataBindRefreshed = {},
-		OnDataBindExpired = {},
-		OnCacheCleaned = {},
-		OnTransactionBegin = {},
-		OnTransactionFiltered = {},
-		OnTransactionEnded = {},
 		OnReleased = {},
-		OnDataError = {},
-		OnSendingBroadcast = {},
-		OnReceivingBroadcast = {},
-		OnLocalBroadcastListenerReady = {},
-		OnLocalBroadcastListenerClosed = {}
+		OnReady = {},
+		OnSaved = {},
+		OnLoaded = {},
+		OnStandby = {},
+		OnAutoSaved = {},
+		OnArchived = {},
+		OnUnarchived = {},
+		
+		OnWrite = {},
+		
+		OnBroadcastSent = {},
+		OnBroadcastReceived = {},
+		
+		OnRecordBroadcastReceived = {},
+		
+		OnError = {},
+		OnDataFiltered = {},
+		
+		OnOwnershipExpired = {}
 	}
 
 	self._UDataComponentDynamicCallbacks = {
-		OnReady = {},
-		OnDataLoaded = {},
-		OnDataSaved = {},
-		OnDataArchived = {},
-		OnDataUnarchived = {},
-		OnDataRecovery = {},
-		OnDataCached = {},
-		OnDataRemoved = {},
-		OnDataBinding = {},
-		OnDataUnbinding = {},
-		OnDataBindRefreshed = {},
-		OnDataBindExpired = {},
-		OnCacheCleaned = {},
-		OnTransactionBegin = {},
-		OnTransactionFiltered = {},
-		OnTransactionEnded = {},
 		OnReleased = {},
-		OnDataError = {},
-		OnSendingBroadcast = {},
-		OnReceivingBroadcast = {},
-		OnLocalBroadcastListenerReady = {},
-		OnLocalBroadcastListenerCalled = {},
-		OnLocalBroadcastListenerClosed = {}
+		OnReady = {},
+		OnSaved = {},
+		OnLoaded = {},
+		OnStandby = {},
+		OnAutoSaved = {},
+		OnArchived = {},
+		OnUnarchived = {},
+
+		OnWrite = {},
+
+		OnBroadcastSent = {},
+		OnBroadcastReceived = {},
+
+		OnRecordBroadcastReceived = {},
+
+		OnError = {},
+		OnDataFiltered = {},
+		
+		OnOwnershipExpired = {}
 	}
 
 	if Configurations then
