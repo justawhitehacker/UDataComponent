@@ -489,38 +489,64 @@ local function compare_and_compress(meta : __UDCInfo_Internal, data : { any? })
 end
 
 -- for deepcloning table
-local function deepclone(tab)
+local function deepclone(tab, seen)
 	if typeof(tab) ~= "table" then
 		return tab
-	end		
-	local newTab = table.clone(tab)
-
+	end
+	local newTab = seen or {}
+	
+	if newTab[tab] then
+		return newTab[tab]
+	end
+	
 	for k, v in pairs(tab) do
-		if typeof(v) == "table" then
-			newTab[k] = deepclone(v)
+		if newTab[k] == nil then
+			newTab[k] = v
+		elseif typeof(v) == "table" and typeof(newTab[k]) == "table" then
+			newTab[k] = deepclone(v, seen)
 		end
 	end
-
+	
 	return newTab
 end
 
 -- for deepcloning then deepfreezing table
-local function deepfreeze(tab)
-	if typeof(tab) ~= "table" then
+local function deepfreeze(tab, frozen)
+	frozen = frozen or {}
+	
+	if frozen[tab] or table.isfrozen(tab) then
 		return tab
 	end
 	
-	local tb = deepclone(tab)
-	table.freeze(tb)
-
-	for k, v in pairs(tab) do
+	frozen[tab] = true
+	table.freeze(tab)
+	
+	for _, v in pairs(tab) do
 		if typeof(v) == "table" then
-			tb[k] = deepfreeze(v)
+			deepfreeze(v, frozen)
 		end
 	end
 	
-	return tb
+	return tab
 end
+
+-- for deepcloning then deepfreezing table
+--local function deepfreeze(tab)
+--	if typeof(tab) ~= "table" then
+--		return tab
+--	end
+	
+--	local tb = deepclone(tab)
+
+--	for k, v in pairs(tab) do
+--		if typeof(v) == "table" then
+--			tb[k] = deepfreeze(v)
+--		end
+--	end
+	
+--	table.freeze(tb)
+--	return tb
+--end
 
 -- to call event
 local function dispatch(record, eventName, ...)
@@ -1558,6 +1584,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
+		
+		print("Bounds 1")
 						
 		-- Checking if the data is still bound to this player
 		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
@@ -1565,6 +1593,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
+		
+		print("Bounds 2")
 								
 		-- Checking if player is still in the server
 		local playerFound = false
@@ -1892,9 +1922,9 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 		
 		local success
+		local customData = deepclone(data.__data) -- use deep-cloned table, so that the main data can't be changed, to prevent some "malicious" or "accident" data modifications
 		meta._LockSessions:Do(record.Key, function()
-			local customData = deepclone(data.__data) -- use deep-cloned table, so that the main data can't be changed, to prevent some "malicious" or "accident" data modifications
-			success = pcall(WritingFunction, data.__data) -- this function returns nothing, but change the data safely
+			success = pcall(WritingFunction, customData) -- this function returns nothing, but change the data safely
 			
 			if not success then
 				return
@@ -1995,7 +2025,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end		
 			
 			local clonedRecord = deepclone(data)
-			record.Data = deepfreeze(clonedRecord.__data)
+			local clonedData = deepclone(data.__data)
+			record.Data = deepfreeze(clonedData)
 						
 			local compressed, flag
 			local found = false
