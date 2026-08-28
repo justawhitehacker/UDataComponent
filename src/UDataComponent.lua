@@ -447,40 +447,40 @@ export type UDCRecord = {
 }
 
 export type UDCEvent = {
-	OnReleased: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnReleased: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is released, actually happened by Sleep() call or Standby() triggers
-	OnReady: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnReady: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is ready to be used, actually happened by Ready()
-	OnSaved: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnSaved: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is saved, actually happened when the data of record finally commited to datastore
-	OnLoaded: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnLoaded: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is loaded, actually happened by Awake()
-	OnStandby: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnStandby: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is on standby action, actually happened by Standby()
-	OnAutoSaved: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnAutoSaved: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is being commited automatically by autosave, happened every autosave interval kicks in
-	OnArchived: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnArchived: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is being detached or archived or removed, happened by Detach()
-	OnUnarchived: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnUnarchived: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is finally unarchived, happened by Unarchive()
 	
-	OnWrite: (UDCRecord: UDCRecord, Callback: (Key: string | number, OldData: any, NewData: any) -> any) -> (),
+	OnWrite: (UDCRecord: UDCRecord, Callback: (Key: string | number, OldData: any, NewData: any) -> any) -> UDCEventConnector,
 	-- happened when the data of the record has been modified before commited, actually happened by Write() or Save() or Force*()
 	
-	OnBroadcastSent: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnBroadcastSent: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is sent to other server with messaging, actually happened by BroadcastCurrentData()
-	OnBroadcastReceived: (UDCRecord: UDCRecord, Callback: (Key: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> (),
+	OnBroadcastReceived: (UDCRecord: UDCRecord, Callback: (Key: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
 	-- happened when the record is received from other server by messaging, this is where you can receive the broadcast packet from a broadcaster server
 	
-	OnRecordBroadcastReceived: (UDCRecord: UDCRecord, Callback: (Key: string | number, BroadcasterKey: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> (),
+	OnRecordBroadcastReceived: (UDCRecord: UDCRecord, Callback: (Key: string | number, BroadcasterKey: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
 	-- happened when a record broadcasting to another record in another server, this is where you can receive the record's broadcasting data
 	
-	OnError: (UDCRecord: UDCRecord, Callback: (Key: string | number, Error: string) -> any) -> (),
+	OnError: (UDCRecord: UDCRecord, Callback: (Key: string | number, Error: string) -> any) -> UDCEventConnector,
 	-- happened when the record is having error in message
-	OnDataFiltered: (UDCRecord: UDCRecord, Callback: (Key: string | number, FilteredData: string | number) -> any) -> (),
+	OnDataFiltered: (UDCRecord: UDCRecord, Callback: (Key: string | number, FilteredData: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is getting filtered by validation, happened when loaded or Write()
 	
-	OnOwnershipExpired: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> (),
+	OnOwnershipExpired: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the ownership of this record expired when preparing
 }
 
@@ -1345,6 +1345,8 @@ local function run_autosave(meta : __UDCInfo_Internal)
 					
 					meta._CurrentAutoSaveWorkers -= 1
 					meta._AutosaveTimestamp[record.Key].Timestamp = workspace:GetServerTimeNow() -- Reset the timestamp to prevent multiple saves, and must be the newest timestamp after saving
+					
+					dispatch(meta, record, "OnAutoSaved")
 				end)
 			end
 		end
@@ -1471,7 +1473,7 @@ local function are_schemas_valid(meta : __UDCInfo_Internal, record : UDCRecord, 
 		end
 		
 		if typeof(element) ~= schema then
-			dispatch(meta, record, "OnFilteredData", key)
+			dispatch(meta, record, "OnDataFiltered", key)
 			return false -- are invalid when there is even one data hasn't same type as validators
 		end
 	end
@@ -1552,7 +1554,7 @@ local function are_datas_valid(meta : __UDCInfo_Internal, record : UDCRecord, da
 		end
 		
 		if not predicate(element) then
-			dispatch(meta, record, "OnFilteredData", key)
+			dispatch(meta, record, "OnDataFiltered", key)
 			return false -- if there is one data that is not valid or same as predicate, return false
 		end
 	end
@@ -1620,6 +1622,129 @@ local function create_validation_class(meta : __UDCInfo_Internal, record : UDCRe
 	meta._TrackedClamps[record.Key] = trackedClamps
 	
 	return validations :: UDCValidation
+end
+
+local function create_event_class(meta : __UDCInfo_Internal, record : UDCRecord): UDCEvent
+	local events = {}
+	local listenerTypes = meta._UDataComponentDynamicCallbacks
+	
+	local function registerCallback(CallbackType: string, Callback: any)
+		local listener = listenerTypes[CallbackType] or {}
+		listener[record.Key] = listener[record.Key] or {}
+		
+		local id = HttpService:GenerateGUID(false)
+		listener[record.Key][id] = Callback
+		
+		local connectors = {}
+		local disconnected = false
+		
+		function connectors:Disconnect()
+			if disconnected then return end
+			disconnected = true
+			
+			listener[record.Key][id] = nil
+		end
+		
+		function connectors:DisconnectAfterCalled()
+			if disconnected then return end
+			
+			local original = Callback
+			listener[record.Key][id] = function(...)
+				local ok, err = pcall(original, ...)
+				connectors:Disconnect()
+				
+				if not ok then
+					error(err)
+				end
+			end
+		end
+		
+		function connectors:IsConnected()
+			return listener[record.Key] and listener[record.Key][id]
+		end
+		
+		function connectors:Wait()
+			if disconnected then return end
+			
+			local currentThread = coroutine.running()
+			listener[record.Key][id] = function(...)
+				local args = table.pack(...)
+				
+				local success, err = pcall(Callback, table.unpack(args, 1, args.n))
+				task.spawn(currentThread, table.unpack(args, 1, args.n))
+				
+				if not success then
+					error(err)
+				end
+			end
+			
+			return coroutine.yield()
+		end
+		
+		return connectors
+	end
+	
+	function events:OnReleased(Callback: (Key: string | number) -> any)
+		return registerCallback("OnReleased", Callback)
+	end
+	
+	function events:OnReady(Callback: (Key: string | number) -> any)
+		return registerCallback("OnReady", Callback)
+	end
+	
+	function events:OnSaved(Callback: (Key: string | number) -> any)
+		return registerCallback("OnSaved", Callback)
+	end
+	
+	function events:OnLoaded(Callback: (Key: string | number) -> any)
+		return registerCallback("OnLoaded", Callback)
+	end
+	
+	function events:OnStandby(Callback: (Key: string | number) -> any)
+		return registerCallback("OnStandby", Callback)
+	end
+	
+	function events:OnAutoSaved(Callback: (Key: string | number) -> any)
+		return registerCallback("OnAutoSaved", Callback)
+	end
+	
+	function events:OnArchived(Callback: (Key: string | number) -> any)
+		return registerCallback("OnArchived", Callback)
+	end
+	
+	function events:OnUnarchived(Callback: (Key: string | number) -> any)
+		return registerCallback("OnUnarchived", Callback)
+	end
+	
+	function events:OnWrite(Callback: (Key: string | number, OldData: any, NewData: any) -> any)
+		return registerCallback("OnWrite", Callback)
+	end
+	
+	function events:OnBroadcastSent(Callback: (Key: string | number) -> any)
+		return registerCallback("OnBroadcastSent", Callback)
+	end
+	
+	function events:OnBroadcastReceived(Callback: (Key: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any)
+		return registerCallback("OnBroadcastReceived", Callback)
+	end
+	
+	function events:OnRecordBroadcastReceived(Callback: (Key: string | number, BroadcasterKey: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any)
+		return registerCallback("OnRecordBroadcastReceived", Callback)
+	end
+	
+	function events:OnError(Callback: (Key: string | number, Error: string) -> any)
+		return registerCallback("OnError", Callback)
+	end
+	
+	function events:OnDataFiltered(Callback: (Key: string | number, FilteredData: any) -> any)
+		return registerCallback("OnDataFiltered", Callback)
+	end
+	
+	function events:OnOwnershipExpired(Callback: (Key: string | number) -> any)
+		return registerCallback("OnOwnershipExpired", Callback)
+	end
+	
+	return events
 end
 
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
