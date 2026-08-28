@@ -1172,7 +1172,7 @@ local function run_autosave(meta : __UDCInfo_Internal)
 				
 				meta._CurrentAutoSaveWorkers += 1
 				task.spawn(function()
-					pcall(record.Save, record, cache)
+					pcall(record.ForceSave, record, cache)
 					meta._CurrentAutoSaveWorkers -= 1
 				end)
 			end
