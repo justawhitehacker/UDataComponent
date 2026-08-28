@@ -320,7 +320,6 @@ export type __UDCInfo_Internal = {
 	_TrackedSchemas : { any? },
 	_TrackedClamps : { any? },
 
-	_UDataComponentCallbacks : { any? },
 	_UDataComponentDynamicCallbacks : { any? },
 
 	-- Configurations
@@ -447,40 +446,40 @@ export type UDCRecord = {
 }
 
 export type UDCEvent = {
-	OnReleased: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnReleased: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is released, actually happened by Sleep() call or Standby() triggers
-	OnReady: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnReady: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is ready to be used, actually happened by Ready()
-	OnSaved: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnSaved: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is saved, actually happened when the data of record finally commited to datastore
-	OnLoaded: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnLoaded: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is loaded, actually happened by Awake()
-	OnStandby: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnStandby: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is on standby action, actually happened by Standby()
-	OnAutoSaved: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnAutoSaved: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is being commited automatically by autosave, happened every autosave interval kicks in
-	OnArchived: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnArchived: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is being detached or archived or removed, happened by Detach()
-	OnUnarchived: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnUnarchived: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is finally unarchived, happened by Unarchive()
 	
-	OnWrite: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnWrite: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the data of the record has been modified before commited, actually happened by Write() or Save() or Force*()
 	
-	OnBroadcastSent: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnBroadcastSent: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is sent to other server with messaging, actually happened by BroadcastCurrentData()
-	OnBroadcastReceived: (UDCRecord: UDCRecord, Callback: (Key: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
+	OnBroadcastReceived: (UDCEvent: UDCEvent, Callback: (Key: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
 	-- happened when the record is received from other server by messaging, this is where you can receive the broadcast packet from a broadcaster server
 	
-	OnRecordBroadcastReceived: (UDCRecord: UDCRecord, Callback: (Key: string | number, BroadcasterKey: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
+	OnRecordBroadcastReceived: (UDCEvent: UDCEvent, Callback: (Key: string | number, BroadcasterKey: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
 	-- happened when a record broadcasting to another record in another server, this is where you can receive the record's broadcasting data
 	
-	OnError: (UDCRecord: UDCRecord, Callback: (Key: string | number, Error: string) -> any) -> UDCEventConnector,
+	OnError: (UDCEvent: UDCEvent, Callback: (Key: string | number, Error: string) -> any) -> UDCEventConnector,
 	-- happened when the record is having error in message
-	OnDataFiltered: (UDCRecord: UDCRecord, Callback: (Key: string | number, FilteredData: string | number) -> any) -> UDCEventConnector,
+	OnDataFiltered: (UDCEvent: UDCEvent, Callback: (Key: string | number, FilteredData: string | number) -> any) -> UDCEventConnector,
 	-- happened when the record is getting filtered by validation, happened when loaded or Write()
 	
-	OnOwnershipExpired: (UDCRecord: UDCRecord, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	OnOwnershipExpired: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the ownership of this record expired when preparing
 }
 
