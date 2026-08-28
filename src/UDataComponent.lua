@@ -513,8 +513,7 @@ local function deepfreeze(tab, frozen)
 		return tab
 	end
 	
-	local copy = {}
-	frozen[tab] = copy
+	local copy = frozen[tab] or {}
 	
 	for k, v in pairs(tab) do
 		if typeof(v) == "table" then
@@ -802,6 +801,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 				end
 
 				CurrentData.__bounds.lastheartbeat = now			
+				CurrentData.__bounds.since = now
 				return CurrentData
 			end)
 		end)
@@ -1651,11 +1651,9 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			penalty()
 			return false
 		end
-		
-		local ready = deepclone(data) -- Data is now ready to be used, as read-only table
-		
+				
 		-- Apply the data to the cache
-		record.Data = deepfreeze(ready) -- Data is now ready to be used, as read-only table
+		record.Data = deepfreeze(data) -- Data is now ready to be used, as read-only table
 		record.CurrentState = "Ready" -- Current state is ready to do things
 		record.Version = meta._UnreadyData[record.Key].__version or 0 -- Set the version of this record to real data version
 		
@@ -2024,8 +2022,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			end		
 			
 			local clonedRecord = deepclone(data)
-			local clonedData = deepclone(data.__data)
-			record.Data = deepfreeze(clonedData)
+			record.Data = deepfreeze(data.__data)
 						
 			local compressed, flag
 			local found = false
@@ -2172,10 +2169,11 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		record.CurrentState = "Running"
 		
 		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+		
+		local clonedRecord = deepclone(data)
+		local clonedData = deepclone(clonedRecord.__data)
 		local isSuccess = false
 		meta._LockSessions:Do(record.Key, function()
-			local clonedRecord = deepclone(data)
-			local clonedData = deepclone(clonedRecord.__data)
 			local success = pcall(WritingFunction, clonedData)
 
 			if not success then
