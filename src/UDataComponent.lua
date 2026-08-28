@@ -451,7 +451,52 @@ export type UDCEvent = {
 }
 
 export type UDCValidation = {
+	AddPredicate: (UDCValidation: UDCValidation, ThisData: string | number, Predicate: (ThisValue: any) -> (), Penetration: number?) -> (),
+	-- Adding validation function where current data must be operating on the exact predicate, if not, the data is invalid to operate
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param Predicate: (ThisValue: any) -> () -- Validation function, ThisValue is the value of the data
+	-- @param Penetration: number? -- Penetration level, default is 1, penetration means that step's access of data if the record was having same data name/index
 	
+	-- For Penetration, 1 does mean that when there is two same data name, like Data = { Data = ... }. It will access Data's data with table value, when you set it to 2, it will access Data's data inside through
+	
+	RemovePredicate: (UDCValidation: UDCValidation, ThisData: string | number, PenetrationIndex: number?) -> (),
+	-- Removing predicate function of validation
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param PenetrationIndex: number? -- Default is 1, removing the validation tag of current data in record
+	
+	RemoveAllPredicates: (UDCValidation: UDCValidation) -> (),
+	-- Removing all predicate function of validation
+	
+	AddSchema: (UDCValidation: UDCValidation, ThisData: string | number, Schema: string, Penetration: number?) -> (),
+	-- Adding schema/type to validate the data, if the data is not match the schema, it will be invalid
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param Schema: string -- String that will be used for checking the data type
+	-- @param Penetration: number? -- Penetration level, default is 1, penetration means that step's access of data if the record was having same data name/index
+	
+	RemoveSchema: (UDCValidation: UDCValidation, ThisData: string | number, PenetrationIndex: number?) -> (),
+	-- Removing schema of current data in record
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param PenetrationIndex: number? -- Default is 1, removing the validation tag of current data in record
+	
+	RemoveAllSchemas: (UDCValidation: UDCValidation) -> (),
+	-- Removing all schema of validation
+	
+	AddClamp: (UDCValidation: UDCValidation, ThisData: string | number, Min: number?, Max: number?, Penetration: number?) -> (),
+	-- Adding clamp to validate the data, if the data is out of bound, it will be clamped through min or max
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param Min: number? -- Minimum value of the data
+	-- @param Max: number? -- Maximum value of the data
+	-- @param Penetration: number? -- Penetration level, default is 1, penetration means that step's access of data if the record was having same data nam
+	
+	-- If you want to set Min function to the data, just set Max to nil, same methods if you set Max instead
+
+	RemoveClamp: (UDCValidation: UDCValidation, ThisData: string | number, PenetrationIndex: number?) -> (),
+	-- Removing clamp of current data in record
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param PenetrationIndex: number? -- Default is 1, removing the validation tag of current data in record
+	
+	RemoveAllClamps: (UDCValidation: UDCValidation) -> (),
+	-- Removing all clamps of validation
 }
 
 export type UDCSwap = {
@@ -1413,6 +1458,68 @@ local function are_datas_valid(meta : __UDCInfo_Internal, record : UDCRecord, da
 	return true -- are valid if all data's validations matched
 end
 
+local function create_validation_class(meta : __UDCInfo_Internal, record : UDCRecord): UDCValidation
+	local validations = {}
+	
+	local trackedPredicates = meta._TrackedValidations and meta._TrackedValidations[record.Key] or {}
+	local trackedSchemas = meta._TrackedSchemas and meta._TrackedSchemas[record.Key] or {}
+	local trackedClamps = meta._TrackedClamps and meta._TrackedClamps and meta._TrackedClamps[record.Key] or {}
+	
+	function validations:AddPredicate(ThisData: string | number, Predicate: (ThisValue: any) -> boolean, Penetration: number?)
+		Penetration = Penetration or 1 -- default penetration
+		
+		trackedPredicates[ThisData] = {Predicate = Predicate, Penetration = Penetration}
+	end
+	
+	function validations:RemovePredicate(ThisData: string | number, PenetrationIndex: number?)
+		PenetrationIndex = PenetrationIndex or 1 -- default penetration
+		
+		trackedPredicates[ThisData] = nil
+	end
+	
+	function validations:RemoveAllPredicates()
+		trackedPredicates = {}
+	end
+	
+	function validations:AddSchema(ThisData: string | number, Schema: string, Penetration: number?)
+		Penetration = Penetration or 1 -- default penetration
+		
+		trackedSchemas[ThisData] = {Schema = Schema, Penetration = Penetration}
+	end
+	
+	function validations:RemoveSchema(ThisData: string | number, PenetrationIndex: number?)
+		PenetrationIndex = PenetrationIndex or 1 -- default penetration
+		
+		trackedSchemas[ThisData] = nil
+	end
+	
+	function validations:RemoveAllSchemas()
+		trackedSchemas = {}
+	end
+	
+	function validations:AddClamp(ThisData: string | number, Min: number?, Max: number?, Penetration: number?)
+		Penetration = Penetration or 1 -- default penetration
+		
+		trackedClamps[ThisData] = {Min = Min, Max = Max, Penetration = Penetration}
+	end
+	
+	function validations:RemoveClamp(ThisData: string | number, PenetrationIndex: number?)
+		PenetrationIndex = PenetrationIndex or 1 -- default penetration
+		
+		trackedClamps[ThisData] = nil
+	end
+	
+	function validations:RemoveAllClamps()
+		trackedClamps = {}		
+	end
+	
+	meta._TrackedValidations[record.Key] = trackedPredicates
+	meta._TrackedSchemas[record.Key] = trackedSchemas
+	meta._TrackedClamps[record.Key] = trackedClamps
+	
+	return validations :: UDCValidation
+end
+
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
 	if meta._ActiveRecords[key] then
 		return meta._ActiveRecords[key]
@@ -1423,7 +1530,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.Owner = owner -- This is the owner of the record
 	record.IsArchived = false -- This is to indicate if the record is archived or not
 	record.Event = nil -- Utils of events for this record
-	record.Validation = nil -- Utils to create validation for this record
+	record.Validation = create_validation_class(meta, record) -- Utils to create validation for this record
 	record.Swap = nil -- Utils to swap data with other record
 	record.Messaging = nil -- Utils to Broadcasting to other servers
 	record.Version = 0 -- This is the version of the data, it will be increased when the data is saved
