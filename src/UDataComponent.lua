@@ -901,7 +901,7 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 	local xresult = success and result
 	
 	if xresult and not meta._ShutdownCalled then
-		local isForcedSaveSuccess, saveResult = pcall(record.ForceSave, record, result)
+		local isForcedSaveSuccess, saveResult = pcall(record.ForceSave, record, data)
 		
 		local index = 0
 		for i, pending in ipairs(meta._SavePendingQueue) do
@@ -917,6 +917,7 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 		
 		if isForcedSaveSuccess and saveResult then
 			pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
+			pcall(record.Sleep, record)
 		end
 		
 		record.CurrentState = "Asleep"
@@ -1179,14 +1180,14 @@ local function run_autosave(meta : __UDCInfo_Internal)
 			for key, info in pairs(meta._AutosaveTimestamp) do
 				if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and meta._DirtySave[key] and meta._DataCache[key] and not meta._ShutdownCalled then
 					table.insert(dirty, info.Record)					
-					meta._AutosaveTimestamp[key].Timestamp = workspace:GetServerTimeNow() -- Reset the timestamp to prevent multiple saves, and must be the newest timestamp
 				end
 			end
 			
 			if #dirty == 0 then break end
 			
 			for _, record in ipairs(dirty) do
-				if budget <= 0 then break end
+				local currentBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync) -- refresh the budget
+				if currentBudget <= 0 then break end
 				
 				local cache = meta._DataCache[record.Key]
 				if not cache then continue end
@@ -1196,7 +1197,9 @@ local function run_autosave(meta : __UDCInfo_Internal)
 				meta._CurrentAutoSaveWorkers += 1
 				task.spawn(function()	
 					pcall(record.ForceSave, record, data)
+					
 					meta._CurrentAutoSaveWorkers -= 1
+					meta._AutosaveTimestamp[record.Key].Timestamp = workspace:GetServerTimeNow() -- Reset the timestamp to prevent multiple saves, and must be the newest timestamp after saving
 				end)
 			end
 		end
