@@ -537,11 +537,11 @@ export type UDCSwap = {
 }
 
 export type UDCBroadcasting = {
-	BroadcastCurrentData: (UDCBroadcasting: UDCBroadcasting, OtherThings: any) -> boolean,
+	BroadcastCurrentData: (UDCBroadcasting: UDCBroadcasting, OtherThings: any?) -> boolean,
 	-- Global broadcasting the data to all servers
 	WaitForBroadcastPacket: (UDCBroadcasting: UDCBroadcasting, Timeout: number?) -> UDCBroadcastingPacket,
 	-- Waiting for global broadcast packet from other server
-	SendLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, OtherThings: any) -> boolean,
+	SendLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, OtherThings: any?) -> boolean,
 	-- Sending local broadcast to other server that listening on the channel
 	ListenToLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
 	-- Listening for local broadcast from other server
@@ -1750,6 +1750,32 @@ local function create_event_class(meta : __UDCInfo_Internal, record : UDCRecord)
 	return events :: UDCEvent
 end
 
+local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDCRecord)
+	local broadcasting = {}
+	
+	function broadcasting:BroadcastCurrentData(OtherThings: any?)
+		
+	end
+	
+	function broadcasting:WaitForBroadcastPacket()
+		
+	end
+	
+	function broadcasting:SendLocalBroadcast(ChannelName: string, OtherThings: any?)
+		
+	end
+	
+	function broadcasting:ListenToLocalBroadcast(ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any)
+		
+	end
+	
+	function broadcasting:SendBroadcastToRecord(Key: string | number, OtherThings: any?)
+		
+	end
+	
+	return broadcasting
+end
+
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
 	if meta._ActiveRecords[key] then
 		return meta._ActiveRecords[key]
@@ -1762,7 +1788,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.Event = create_event_class(meta, record) -- Utils of events for this record
 	record.Validation = create_validation_class(meta, record) -- Utils to create validation for this record
 	record.Swap = nil -- Utils to swap data with other record
-	record.Messaging = nil -- Utils to Broadcasting to other servers
+	record.Broadcasting = create_broadcasting_class(meta, record) -- Utils to Broadcasting to other servers
 	record.Version = 0 -- This is the version of the data, it will be increased when the data is saved
 	record.Data = nil -- This is the data of the record
 	record.CurrentState = "Asleep"
