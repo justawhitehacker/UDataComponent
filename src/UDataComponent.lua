@@ -1995,7 +1995,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 		return success
 	end
 	
-	function broadcasting:WaitForBroadcastPacket(Timeout: number?)
+	function broadcasting:WaitForBroadcastPacket(Timeout: number?) : UDCBroadcastingPacket
 		Timeout = Timeout or 50
 		local currentThread = coroutine.running()
 		
@@ -2010,11 +2010,37 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 				local data = message.Data
 				if not data then return end
 				
+				local flag = data.__flag
+				local compressedData = data.__data
+				if not compressedData or not flag then return end
 				
+				local success, data = pcall(Compressor.TryToDecompress, compressedData, flag)
+				if not success then return end
+				
+				local finishedData = deepclone(data)
+				
+				task.spawn(currentThread, finishedData)
+				connection:Disconnect()
 			end)
 		end)
 		
-		local packet = coroutine.yield()
+		if not success then
+			throw(meta, record, "Error while waiting for broadcast packet: " .. err)
+			return nil
+		end
+		
+		local timeoutSpawn = task.delay(Timeout, function()
+			if called then return end
+			called = true
+
+			if connection then connection:Disconnect() end
+			task.spawn(currentThread, nil)
+		end)
+		
+		local result = coroutine.yield()
+		if timeoutSpawn then task.cancel(timeoutSpawn) end
+		
+		return result :: UDCBroadcastingPacket
 	end
 	
 	function broadcasting:SendLocalBroadcast(ChannelName: string, OtherThings: any?)
