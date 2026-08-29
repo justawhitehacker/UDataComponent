@@ -236,7 +236,6 @@ export type UDCInfo = {
 	AutoSaveEnabled : boolean, -- If this UDataComponent's info allowed to auto-save data in background
 	AutoSaveInterval : number, -- Interval between each auto-save
 	WALDataSuffix : string, -- Suffixed to the DataStore name for the WAL
-	WALMaxEntries : number, -- Maximum entries in the WAL
 	OwnershipExpiration : number, -- Duration for the data's ownership, where the player can holds the data and server claiming current data to other servers
 	SwappingEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
 	SwappingCooldown : number, -- Cooldown between each swap
@@ -251,6 +250,8 @@ export type UDCInfo = {
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
 	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
+	MessagingExpiration : number, -- Duration for the broadcast to expire
+	MessagingMaxPacketSize : number, -- Maximum size for the broadcast message
 	MessagingSendingCooldown : number, -- Cooldown for sending the broadcast informations
 	MessagingReceivingCooldown : number, -- Cooldown for listening the broadcast messages
 	MessagingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
@@ -295,12 +296,14 @@ export type __UDCInfo_Internal = {
 	_AutosaveTimestamp : { any? },
 	_SavePendingQueue : { any? },
 	_ObtainPendingQueue : { any? },
+	_BroadcastPendingQueue : { any? },
 	_UnreadyData : { any? },
 	_DataCache : { any? },
 	_CompressionStack : { any? },
 	_StandbyRegistry : { any? },
 	_DirtySave : { any? },
 	_LockSessions : any,
+	_BroadcastingTimestamps : { any? },
 	_LocalBroadcastListeners : { any? },
 
 	_ExclusiveTimerCalled : boolean,
@@ -311,6 +314,8 @@ export type __UDCInfo_Internal = {
 	_IsCompressionTimerRunning : boolean,
 	_CacheCleaningCalled : boolean,
 	_StandbyReady : boolean,
+	_RecordBroadcastCalled : boolean,
+	_BroadcastQueueRunning : boolean,
 	
 	_CurrentLoadWorkers : number,
 	_CurrentSaveWorkers : number,
@@ -336,7 +341,6 @@ export type __UDCInfo_Internal = {
 	AutoSaveEnabled : boolean, -- If this UDataComponent's info allowed to auto-save data in background
 	AutoSaveInterval : number, -- Interval between each auto-save
 	WALDataSuffix : string, -- Suffixed to the DataStore name for the WAL
-	WALMaxEntries : number, -- Maximum entries in the WAL
 	OwnershipExpiration : number, -- Duration for the data's ownership, where the player can holds the data and server claiming current data to other servers
 	SwappingEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
 	SwappingCooldown : number, -- Cooldown between each swap
@@ -351,6 +355,8 @@ export type __UDCInfo_Internal = {
 	LocalDataNamespace : string, -- Namespace for the local record level
 	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
 	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
+	MessagingExpiration : number, -- Duration for the broadcast to expire
+	MessagingMaxPacketSize : number, -- Maximum size for the broadcast packet, in bytes
 	MessagingSendingCooldown : number, -- Cooldown for sending the broadcast informations
 	MessagingReceivingCooldown : number, -- Cooldown for listening the broadcast messages
 	MessagingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
@@ -374,7 +380,7 @@ export type UDCRecord = {
 	Event: UDCEvent, -- Utils for the events
 	Validation: UDCValidation, -- Utils for the validation
 	Swap: UDCSwap, -- Utils for the swap
-	Messaging: UDCBroadcasting, -- Utils for the messaging
+	Broadcasting: UDCBroadcasting, -- Utils for the messaging
 	Version: number, -- Version of this data
 	Data: any?, -- Loaded Data that has been loaded, this is a clone from the actual data/cache, where this must be a read-only member
 	CurrentState: string, -- Current state of this data, can be: "Asleep", "WakingUp", "Ready", "Running", "Sleeping", "Died"
@@ -540,7 +546,7 @@ export type UDCBroadcasting = {
 	BroadcastCurrentData: (UDCBroadcasting: UDCBroadcasting, OtherThings: any?) -> boolean,
 	-- Global broadcasting the data to all servers
 	WaitForBroadcastPacket: (UDCBroadcasting: UDCBroadcasting, Timeout: number?) -> UDCBroadcastingPacket,
-	-- Waiting for global broadcast packet from other server
+	-- (ULTIMATELY SUSPENDING) Waiting for global broadcast packet from other server
 	SendLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, OtherThings: any?) -> boolean,
 	-- Sending local broadcast to other server that listening on the channel
 	ListenToLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
@@ -550,7 +556,12 @@ export type UDCBroadcasting = {
 }
 
 export type UDCBroadcastingPacket = {
-	
+	BroadcasterKey: string | number, -- record's key who broadcasted
+	BroadcasterData: any, -- record's data of broadcaster
+	BroadcasterServerId: string, -- broadcaster record's current server id 
+	BroadcasterOwnerId: number, -- the owner id of the record
+	BroadcastTime: number,	 -- timestamp of broadcasting
+	OtherThings: any?, -- other things you want to send with the broadcast
 }
 
 export type UDCEventConnector = {
@@ -579,6 +590,38 @@ local function compare_and_compress(meta : __UDCInfo_Internal, data : { any? })
 	local buff, flag = Compressor.TryToCompress(data, meta.CompressionLevel, meta.CompressionThreshold)
 
 	return buff, flag
+end
+
+local function compare_broadcast_payload(meta : __UDCInfo_Internal, rawData : any)
+	local success, encoded = pcall(HttpService.JSONEncode, HttpService, rawData)
+	if not success then return nil, nil, "failed" end
+
+	if #encoded <= meta.MessagingMaxPacketSize then
+		return encoded, "R", nil
+	end
+
+	local success, compressed, flag = pcall(compare_and_compress, meta, rawData)
+	if success and compressed and flag and #compressed <= meta.MessagingMaxPacketSize then
+		return compressed, flag, nil
+	end
+
+	return nil, nil, "oversized"
+end
+
+local function can_send_broadcast(meta : __UDCInfo_Internal)
+	local now = workspace:GetServerTimeNow()
+	local timestamps = meta._BroadcastingTimestamps
+
+	while #timestamps > 0 and now - timestamps[1] > 60 do
+		table.remove(timestamps, 1)
+	end
+
+	local limit = math.min(150 + (#Players:GetPlayers() * 10), 250)
+	return #timestamps < limit
+end
+
+local function record_broadcast_sent(meta : __UDCInfo_Internal)
+	table.insert(meta._BroadcastingTimestamps, workspace:GetServerTimeNow())
 end
 
 -- for deepcloning table
@@ -1356,6 +1399,34 @@ local function run_autosave(meta : __UDCInfo_Internal)
 	end)
 end
 
+local function run_broadcast_queue(meta : __UDCInfo_Internal)
+	if meta._BroadcastQueueRunning or meta._ShutdownCalled then return end
+	meta._BroadcastQueueRunning = true
+	
+	RunService.Heartbeat:Connect(function() 
+		while #meta._BroadcastPendingQueue > 0 and can_send_broadcast(meta) and meta.MessagingEnabled and not meta._ShutdownCalled do
+			local item = table.remove(meta._BroadcastPendingQueue, 1)
+			if not item then continue end
+			
+			if item.Target then
+				item.Packet.__target = item.Target
+			end
+			
+			local success, err = pcall(function()
+				return MessagingService:PublishAsync(item.Channel, item.Packet)
+			end)
+			
+			record_broadcast_sent(meta)
+			
+			if success then
+				dispatch(meta, item.Record, "OnBroadcastSent")
+			else
+				throw(meta, item.Record, "Unable to broadcast packet, reason: " .. tostring(err))
+			end
+		end
+	end)
+end
+
 local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
 	run_load_queue(meta) -- First-time run the load queue if it's not running
 	
@@ -1422,6 +1493,22 @@ local function push_to_autosave(meta : __UDCInfo_Internal, record : UDCRecord)
 	end
 	
 	return false
+end
+
+
+local function enqueue_broadcast(meta : __UDCInfo_Internal, record : UDCRecord, channel : string, packet : any, targetKey : string? | number?)
+	if not meta.MessagingEnabled then
+		return
+	end
+	
+	run_broadcast_queue(meta) -- First-time run the broadcast queue if it's not running
+
+	table.insert(meta._BroadcastPendingQueue, {
+		Channel = channel,
+		Packet = packet,
+		Record = record,
+		Target = targetKey,
+	})
 end
 
 local function is_key_pending_load(meta : __UDCInfo_Internal, key : string)
@@ -1750,6 +1837,55 @@ local function create_event_class(meta : __UDCInfo_Internal, record : UDCRecord)
 	return events :: UDCEvent
 end
 
+local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal)
+	if not meta.MessagingEnabled or meta._RecordBroadcastCalled then return end
+	meta._RecordBroadcastCalled = true
+	
+	local success, err = pcall(function()
+		return MessagingService:SubscribeAsync(meta.MessagingNamespace .. "-RecordBroadcast", function(message)
+			local data = message.Data
+			if data and data.BroadcasterServerId == ServerId then 
+				return 
+			end
+						
+			local timestamp = data.BroadcastTime or 0
+			local key = data.BroadcasterKey or 0
+			local ownerId = data.BroadcasterOwnerId or 0
+			
+			local target = data.__target
+			if target and target == key then return end
+			
+			local record = meta._ActiveRecords[target]		
+			if not record then return end
+			
+			if workspace:GetServerTimeNow() + meta.MessagingExpiration > timestamp then 
+				throw(meta, record, "Received broadcast packet is expired or invalid.")
+				return 
+			end
+			
+			local broadcasterData = data.BroadcasterData
+			if not broadcasterData then 
+				throw(meta, record, "Anonymous record data is missing.")
+				return 
+			end		
+			
+			local packet = deepfreeze({
+				BroadcasterKey = key,
+				BroadcasterData = broadcasterData,
+				BroadcasterServerId = data.BroadcasterServerId,
+				BroadcasterOwnerId = data.BroadcasterOwnerId,
+				BroadcastTime = timestamp,
+				OtherThings = data.OtherThings or {}
+			})
+			dispatch(meta, record, "OnRecordBroadcastReceived", key, packet)
+		end)
+	end)
+	
+	if not success then
+		warn("[UDataComponent-InternalErr]: " .. err)
+	end
+end
+
 local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDCRecord)
 	local broadcasting = {}
 	
@@ -1770,6 +1906,21 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	end
 	
 	function broadcasting:SendBroadcastToRecord(Key: string | number, OtherThings: any?)
+		if not meta.MessagingEnabled then
+			throw(meta, record, "Messaging is disabled.")
+			return false
+		end
+		
+		local data = meta._DataCache[record.Key]
+		if not data then
+			throw(meta, record, "Data is not loaded.")
+			return false
+		end
+		
+		local finishedData = deepclone(data)
+		
+		local timestamp = workspace:GetServerTimeNow()
+		local ownerId = record.Owner and record.Owner.UserId or 0
 		
 	end
 	
@@ -1787,7 +1938,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.IsArchived = false -- This is to indicate if the record is archived or not
 	record.Event = create_event_class(meta, record) -- Utils of events for this record
 	record.Validation = create_validation_class(meta, record) -- Utils to create validation for this record
-	record.Swap = nil -- Utils to swap data with other record
+	record.Swap = nil -- (COMING SOON!) Utils to swap data with other record
 	record.Broadcasting = create_broadcasting_class(meta, record) -- Utils to Broadcasting to other servers
 	record.Version = 0 -- This is the version of the data, it will be increased when the data is saved
 	record.Data = nil -- This is the data of the record
@@ -2044,6 +2195,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		meta._ActiveRecords[record.Key] = record -- Add the record to active records, so developer can access the record
 		
 		push_to_autosave(meta, record)
+		set_broadcast_record_subscriber(meta) -- first time Ready initialized, broadcast subscriber will be set
 		
 		record._ReadyProgress = false
 		
@@ -3062,7 +3214,6 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.AutoSaveEnabled = true
 	self.AutoSaveInterval = 300
 	self.WALDataSuffix = "_wal"
-	self.WALMaxEntries = 50
 	self.OwnershipExpiration = 1 -- 1 Day
 	self.SwappingEnabled = true
 	self.SwappingCooldown = 5
@@ -3077,6 +3228,8 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.LocalDataNamespace = "LUDataComponent"
 	self.MessagingEnabled = false
 	self.MessagingNamespace = "UDCBroadcast"
+	self.MessagingExpiration = 10 -- 10 seconds
+	self.MessagingMaxPacketSize = 900 -- 900 bytes
 	self.MessagingSendingCooldown = 5
 	self.MessagingReceivingCooldown = 5
 	self.MessagingLocalListeningCooldown = 5
@@ -3112,12 +3265,14 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SavePendingQueue = {} -- { {Meta: UDCRecord, Thread: thread} }
 	self._ObtainPendingQueue = {} -- { {Meta: UDCRecord, Thread: thread} }
+	self._BroadcastPendingQueue = {} -- { [Key] = { Packet: any, HasTarget: boolean }
 	self._UnreadyData = {} -- { [Key: string] = true }
 	self._DataCache = {} -- { [Key: string] = Data: any }
 	self._CompressionStack = {} -- { [Key: string] = {Record: UDCRecord, Tick: number} }
 	self._StandbyRegistry = {} -- { {Record, Key} }
 	self._DirtySave = {} -- { [Key: string] = true }
 	self._LockSessions = ScopedMutex.new(Mutex)
+	self._BroadcastingTimestamps = {} -- { [Key: string] = timestamp: number }
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
 
 	self._ShutdownCalled = false
@@ -3128,6 +3283,8 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._CacheCleaningCalled = false
 	self._StandbyReady = false
 	self._AutosaveCalled = false
+	self._RecordBroadcastCalled = false
+	self._BroadcastQueueRunning = false
 	
 	self._CurrentLoadWorkers = 0
 	self._CurrentSaveWorkers = 0
