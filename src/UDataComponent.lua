@@ -1,156 +1,141 @@
--- UDataComponent
--- A data component that can be used to store data in a way that is easy to use and manage
-
 --[[
-	== Informations ==
-	
-	Creator: @RaihanMan18 (Raihan Naufal Azmi)
-	Version: UDataComponent v1.0
-	Module-goal: DataStore wrapper
-	Created-since: 5 August 2026
-	License: MIT
-	
-	Written in Luau for Roblox
-	
-	== END ==
-	
-	SIMPLE DOCUMENTATION:
-	
-	Before that, I will tell you what's the differende between Safe, Force, and Normal (un-prefixed).
-	
-	- Safe
-	--- This is method where your data will be handled with locks and queue-based ---
-		
-	- Force
-	--- This is method where the data is immediately commited into data store of roblox, whether affected by cooldown or not, based of the configuration ---
-	
-	- Normal
-	--- This is method where the data handled normally by UDataComponent. Enququed, then commited, without locks. and affected by the cooldown ---
-	
-	== Constructor ==
-	
-	UDataComponent.InDataInfo(DataStoreName: string, scope : string?) : UDataComponentInfo
-	---- Creates a new UDataComponent info object, where all handler tables constructed ----
-	
-	== END ==
-	
-	== UDataComponentInfo ==
-	
-	UDataComponentInfo:GetPlayerData(Key: number | string, Callbacks: {UDataComponentCallbackFunctions?}) : UDataComponentRecord
-	---- Gets the data of a player, allows you to access player's data level
-	
-	UDataComponentInfo:GetDataStoreName() : string
-	---- Gets the current data store name ----
-	
-	UDataComponentInfo:GetLocalData(Callbacks: {UDataComponentCallbackFunctions?}) : UDataComponentRecord
-	---- You can say Local Data is a "global data of this data store", where you can use this to store data where is not related to a player, but current data store ----
-	
-	UDataComponentInfo.Enabled : boolean --> Allows to UDataComponent process this data store to be loaded and saved
-	UDataComponentInfo.ValidationEnabled : boolean --> Allows to UDataComponent validate this data store before saving
-	UDataComponentInfo.CallbackEnabled : boolean --> Allows to UDataComponent listen the callbacks
-	UDataComponentInfo.RequestTimestampCooldown : number --> Minimum time between each request to the data store
-	UDataComponentInfo.DefaultDataLoadingAttempts : number --> Minimum attempts to load the data
-	UDataComponentInfo.DefaultDataLoadingYieldDuration : number --> Minimum duration to yield when loading data
-	UDataComponentInfo.WALEnabled : boolean --> Allows to UDataComponent to use Write Ahead Logging
-	UDataComponentInfo.DefaultSaveAttempts : number --> Minimum attempts to save the data
-	UDataComponentInfo.DefaultYieldAttempts : number --> Minimum duration to yield when saving data
-	UDataComponentInfo.MaxKeyLength : number --> Maximum key length
-	UDataComponentInfo.BackupEnabled : boolean --> Allows to UDataComponent to use backup data
-	UDataComponentInfo.BackupYieldDuration : number --> Minimum duration to yield when saving backup data
-	UDataComponentInfo.StrictlyUnallowDetaching : boolean --> Unallows UDataComponent to detach/delete data
-	UDataComponentInfo.BackupRemovedWhenDetached : boolean --> Removes the backup data when the data is detached
-	UDataComponentInfo.AutoSaveEnabled : boolean --> Enables the data to be saved automatically
-	UDataComponentInfo.AutoSaveInterval : number --> Interval to save the data
-	UDataComponentInfo.WALDataSuffix : string --> Suffix to the data key for Write Ahead Logging
-	UDataComponentInfo.WALMaxEntries : number --> Maximum entries in the Write Ahead Logging
-	UDataComponentInfo.BackupDataSuffix : string --> Suffix to the data key for backup data
-	UDataComponentInfo.ExclusiveAccessEnabled : boolean --> Allows to UDataComponent to use exclusive access
-	UDataComponentInfo.ExclusiveAccessExpiration : number --> Duration of exclusive data for each players since bound
-	UDataComponentInfo.SwappingEnabled : boolean --> Allows to UDataComponent to swap/transaction data between players
-	UDataComponentInfo.SwappingCooldown : number --> Minimum time between each swap/transaction request
-	UDataComponentInfo.CacheCleaningEnabled : boolean --> Enables the cache to be cleaned automatically
-	UDataComponentInfo.CacheCleaningInterval : number --> Interval to clean the cache
-	UDataComponentInfo.DataExpiredDuration : number --> Duration of data to be considered as expired
-	UDataComponentInfo.DataBlueprint : {any} --> Default data structure for template/blueprint
-	UDataComponentInfo.ErrorReasonNamespace : string --> Namespace of error of UDataComponent
-	UDataComponentInfo.LocalDataNamespace : string --> Namespace of local data of UDataComponent
-	UDataComponentInfo.MessagingEnabled : boolean --> Allows to UDataComponent to replicate the data to other servers
-	UDataComponentInfo.MessagingNamespace : string --> Namespace of broadcasting data to other servers
-	UDataComponentInfo.MessagingSendingCooldown : number --> Cooldown of each sending to other servers
-	UDataComponentInfo.MessagingReceivingCooldown : number --> Cooldown of each receiving from other servers
-	UDataComponentInfo.MessagingLocalListeningCooldown : number --> Cooldown of each local listening to other servers
-	UDataComponentInfo.ServerClaimerSuffix : string --> Suffix of server that currently claiming data of a player/key
-	UDataComponentInfo.ArchivationEnabled : boolean --> Allows to UDataComponent to use archivation when detached
-	UDataComponentInfo.ArchivationSuffix : string --> Suffix of archived data
-	UDataComponentInfo.MessagingDebugEnabled : boolean --> Enables the debug messages of broadcasting
-	UDataComponentInfo.MaxDataSavingPerTick : number --> Maximum data saving per tick
-	
-	== END ==
-	
-	== UDataComponentRecord ==
-	
-	UDataComponentRecord:Get(LoadRecovery? = false, ExclusivePlayer? = nil), returns (Status: boolean, Data: any)
-	-- Get the data record of current info --
-	-- When you used this function twice or more, this will return cache of data's record, to prevent boom request --
-	
-	-- !param LoadRecovery: boolean? = Invokes TryToRecover function to check if there was a record that haven't been commited, which is from WAL
-	-- !param ExclusivePlayer: Player? = Checking data with player, if this data was belong and exclusived to the player
-	
-	-> Example:
-	local currentData = info:GetPlayerData(plr.UserId)
-	local status, data = currentData:Get(true, plr) -- Get the data of player with recovery, recommended to be called on first-join or data load
-	
-	
-	
-	UDataComponentRecord:Save(Data: any, SegmentIndex: number? = nil), returns (Status: boolean)
-	-- Save the data record of current info --
-	-- Data will be cached first before commited to data store --
-	
-	-- !param Data: any = Current data to commit
-	-- !param SegmentIndex: number? = Index of table segment for data, as if used index to contain the data value
-	
-	-> Example:
-	local currentData = info:GetPlayerData(plr.UserId)
-	local isSuccess = currentData:Save({
-		Money = (Money or 0) + 100,
-		Items = (Items or 0) + 1,
-	})
-	
-	-> Example (if use SegmentIndex):
-	local currentData = info:GetPlayerData(plr.UserId)
-	local isMoneySuccess = currentData:Save(100, 1) -- Save the "Money" data of player with index of 1
-	local isItemsSuccess = currentData:Save(1, 2) -- Save the "Items" data of player with index of 2
-	
-	-- This will be { 100, 1 }, where you can access first index as "Money" and second index as "Items"
-	
-	
-	
-	UDataComponentRecord:Write(WritingFunction: (CurrentData: any) -> any), returns (Status: boolean)
-	-- Modify the partial data of current data record, before saved to data store --
-	-- Same as Save, data will be cached first before commited to data store --
-	
-	-- !param WritingFunction: (CurrentData: any) -> any = Function to modify the data
-		-- @param CurrentData: any = Current data to modify
-	-- !important: You should return the CurrentData in modifier function after modify the data
-	
-	-> Example:
-	local currentData = info:GetPlayerData(plr.UserId)
-	local isSuccess = currentData:Write(function(data)
-		data.Money += 100
-		data.Items += 1
-		
-		return data
-	end)
-	
-	
-	
-	UDataComponentRecord:Flush()
+Created by RaihanMan18
 
-	== END ==
+Profiles:
+Creator Name: @RaihanMan18 (Raihan Naufal Azmi)
+Creation Name: UDataComponent v2.0
+Integrity: Secure data with ownership and server session locking, with strong runtime data-checking with mutexes and queue
+Team: Solo Creator
+License: MIT License
+Language: Luau
+Version: 2.0
+
+Last Update: Aug 25 2026
+
+SOME INFORMATION USE I OR ME, IT'S REFERENCING TO MYSELF (Raihan), AND
+SOME INFORMATION MENTION "UDC", IT'S REFERENCING TO SELF-AUTOMATIC SYSTEM OF THIS MODULE (UDataComponent)
+
+Notes!
+
+UDataComponent is an Essential module.
+You can't change the absolute things from UDataComponent and its module,
+like what it's operating internally, you should understand or adapted to what UDC handles for you.
+
+When you tried to change ownership of a record, it may cause a corrupt both in data and this module's consistency.
+Yes, you can use "Enter()", etc. for ownership transfer. BUT, it's not a recommended method, even though I created that methods, just for specific purposes.
+Meanwhile, you can just use Sleep() method to release the ownership. And anoother server can safely claim the record.
+
+API Public Cores that you can use in flexible way (for beginner, advanced, etc):
+
+- Awake() -- Pulling the player's record, and make it "waking up" from sleep, while start to claiming the ownership of this record to current server
+
+- Ready(FindingPlayerTimeout: number = 10) -- Preparing the player's record with deep and strict checking, this is where the data of record decompressed, reconciled, validated, and prepared to record.Data
+
+- Standby() -- Automatically release the record with sleep, while safely save the current data of record that modified from record.Data, both for server shutdown or normal player leaving
+
+- record.Data -- This is where you can access the data of player's record as read-only. But in condition, the data is ready
+
+- Save(Data: any = record.Data, SegmentIndex: number nil) -- Save the whole data, and you can specify the segment index to save the data to that segment.
+
+- Write(WritingFunction: (CurrentData: any)) -- Write the current data of the record safely, meanwhile this is a best choice for modifying the data with validations, 
+
+Sleep() -- Manual core
+
+BATTLE TEST RESULTS:
+
+A. Core Testing
+1. Data is loaded correctly
+2. Data is ready properly
+3. Data record can be accessed everywhere after ready
+4. Data can be changed from .Data, but you need to use Save() to save it
+5. Write() executes properly, and returns failed when the data is already released or asleep
+6. Save() with custom data successfully saved the data
+7. Save() with custom data AND segment index successfully saved the data
+8. When trying to access .Data before Ready() even called, it will return nil
+9. When trying to call record for sleep twice, first operation will return true, and second operation will return false
+10. When trying to call record then ready, then sleep, then awake again and ready, it's successfully awakening the .Data
+11. When trying to use record members, or modify the data before Ready called. It will return nil or failed, without crashing
+12. When trying to use record members, or modify the data after sleep. It will return nil or failed, without crashing
+
+Result of Core Testing: SUCCESS
+
+B. Reconciliation Testing
+1. When there is a missing element, it will be reconciled
+2. When trying to use Save() just only to save some datas without including other elements as blueprint, it will automatically reconciled missing elements
+3. When there is/are new element(s) from blueprint, meanwhile loaded old data from a record haven't included those element(s) because recently added, it will automatically reconciled
+4. Same as number 3, but nested data will also reconciled
+5. When there is/are removed elements from blueprint, meanwhile you've been loaded it already, it remains without missing
+6. Reconcile works gracefully, no elements overlapping when the data already loaded or existed
+
+Result of Reconciliation Testing: SUCCESS
+
+C. Exclusive Access (Single Server)
+1. Awake() for the first time, when first player successfully awakened, other players will not be able to awake and kicked, meanwhile if they're rejoining it will be able to awake (FIXED)
+2. When trying to Ready() with another owner of record who not belonged this data, it will failed successfully
+3. When tries to Awake() twice or more before Sleep() called, it will return false
+4. __bounds info in record successfully captured after Awake()
+
+Result of Exclusive Access (Single Server) Testing: PARTIALLY SUCCESS, No.1 failed
+New Result: FIXED, SUCCESS
+
+D. Multi Server testing (CRUCIAL)
+1. When a player Awake() his own record, the server and the player claimed the record. When another server and even another player tries to Awake() the same record, it will return false
+2. When the owner of record released the session with Sleep(), another server that tries to claim record with Awake(), it will be able to claim the record
+3. When ServerB tries to claim a record that has been claimed by ServerA, before shutdown/stale time or stopped heartbeat (because no activity from the record), it cannot claim the record
+4. But, when the record from ServerA is died, it can be claimed by ServerB as long as the heartbeat is dead
+5. When two servers, ServerA and ServerB, both tries to Awake() the same record at the same time, it will be handled gracefully, and only one of them will be able to claim
+6. When a player hopped from ServerA to ServerB, and the record from ServerA has been ready and released, ServerB allowed to claim the record from ServerA
+
+Result of Multi Server Testing: SUCCESS
+
+E. WAL Testing
+1. When there is a WAL entry, it will be applied to the data, but before that, the version of WAL and remaining Main Data will be compared
+2. When WAL entry's version is newer than the remaining Main Data, it will be applied to the data, otherwise, it will be ignored
+3. After WAL entry is applied, the entry will be removed
+4. Even WAL entry didn't get removed after applied its entry to Main Data, it won't be a problem, because it will be removed after the next update and still returns the data
+5. When shutdown or player removing, the data will be written into WAL first, and the emergency compression with specific level applied gracefully, but if the entry was just for player leaving and not
+	server shutdowning, the entry just replaced by ForceSave and the entry of WAL removed
 	
+Result of WAL Testing: SUCCESS
+
+F. Compression Testing
+1. When the data is small, and overhead detected, it just applied the raw/real buffer data into the data of record
+2. Otherwise, when the data is big/so big, and no overhead detected, it will be compressed and applied into the data of record
+3. Consistent flag that indicates the compression of data type, 'C' means compressed, 'R' means real/uncompressed/raw
+4. Consistent decompressing by check the flag of record when preparing, if 'C' will be decompressed, 'R' will be applied to record explicitly
+5. When a compression stack was compressed and the data was proceed to save, but its in same compression or compressed by the compressor stack, it would use the same compression would rather than generate a new one
+6. Consistent compression, not following the same compression at first write. But a new one, from compressor stack or a new one
+
+Result of Compression Testing: SUCCESS
+
+G. Concurrency Testing
+1. Burst Awake() after joined within 20 calls, didn't crash and budget is saved as much as possible
+2. Burst Awake() within 15 calls with max load concurrent worker within 3 workers, handled the load data gracefully and maximally 3 or less workers of each working
+3. Grace operations of datastore budget, when trying to load the record, without create too much requests to the datastore
+4. When the player is leaving meanwhile the record processing to save the data, it won't commit into datastore
+5. Calling 100 records, with just save concurrent workers as much as 10. Can commit all records into datastore without any overlaps each keys
+6. Mutexes work, when two thread tries to Write for same record. Those functions able to save the data, one thread save the data meanwhile another data waits. and then the waited thread operates
+
+Result of Concurrency Testing: SUCCESS
+
+H. Standby testing
+1. Standby() easily saving the data of record and released, both from PlayerLeaving or server shutdown
+2. Server shutdown handles all active records that in standby, saving then releasing.
+3. Easily handles all 150 player's records when server shutdown, and roughly maximum as 200 records could be handled too
+4. Easily saving 200 players when shutdown, with heavy data and compression
+
+Result of Standby Testing: SUCCESS
+
 --]]
 
-local UDataComponent = {}
+
+-- UDataComponent.lua
+-- UDataComponent-v2.0
+
+-- I decided to refactor, but also created a new one
+-- I probably still stealing some features from the previous version into here
+-- That'd cut some many times instead imagining a new-massive module features
+local UDataComponent : UDataComponent = {}
 UDataComponent.__index = UDataComponent
 
 local DataStoreService = game:GetService("DataStoreService")
@@ -159,2481 +144,3479 @@ local Players = game:GetService("Players")
 local MessagingService = game:GetService("MessagingService")
 local HttpService = game:GetService("HttpService")
 
-local placeId = game.PlaceId
+local Compressor = require(script.Compressor)
+local Mutex = require(script.Mutex)
+local ScopedMutex = require(script.ScopedMutex)
 
-local __sc = script.ScopedMutex
+local ServerId = _G.__UDC_MOCK_SERVERID or game.JobId
+local PlaceId = game.PlaceId
 
-local SDictionary = require(script.SDictionary)
-local Mutex = require(__sc.Mutex)
-local ScopedMutex = require(__sc)
+local ConnectionTest = DataStoreService:GetDataStore("ConnectionTest-" .. PlaceId)
 
-export type UDataComponentValidationDummy = {
-	-- Inserting a predication of data whereas the data can be written when the predicate fulfilled
-	InsertPredicate: (self: UDataComponentValidationDummy, ThisData: any, Predicate: (ThisValue: any) -> any) -> any,
-	RemovePredicate: (self: UDataComponentValidationDummy, ThisData: any) -> any,
+local EMERGENCY_COMPRESSION_LEVEL = 0
 
-	InsertClamp: (self: UDataComponentValidationDummy, ThisData: any, Min: number?, Max: number?) -> any,
-	RemoveClamp: (self: UDataComponentValidationDummy, ThisData: any) -> any,
+local InfosStorage = {}
 
-	InsertSchema: (self: UDataComponentValidationDummy, ThisData: any, Type: string) -> any,
-	RemoveSchema: (self: UDataComponentValidationDummy, ThisData: any) -> any
-} 
+UDataComponent.Enabled = true
 
-export type UDataComponentRecord = {
-	Get: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?) -> any,
-	Save: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> boolean,
-	Write: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> boolean,
-	Flush: (self: UDataComponentRecord) -> (),
-	Recover: (self: UDataComponentRecord) -> boolean,
-	Detach : (self: UDataComponentRecord) -> (),
-	ForceSave: (self: UDataComponentRecord, AlongCooldown: number, Data: any, SegmentIndex: number?) -> boolean,
-	ForceWrite: (self: UDataComponentRecord, AlongCooldown: number, WritingFunction: (CurrentData: any) -> any) -> boolean,
-	SafeGet: (self: UDataComponentRecord, LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?) -> boolean,
-	SafeSave: (self: UDataComponentRecord, Data: any, SegmentIndex: number?) -> (),
-	SafeWrite: (self: UDataComponentRecord, WritingFunction: (CurrentData: any) -> any) -> boolean,
-	AcquireLockSession: (self: UDataComponentRecord, OwnerIdentity: string?, Timeout: number?) -> (boolean, any), 
-	ReleaseLockSession: (self: UDataComponentRecord, OwnerIdentity: string) -> (),
-	IsSessionLocked: (self: UDataComponentRecord, OwnerIdentity: string) -> boolean,
-	BindExclusiveAccess: (self: UDataComponentRecord, ExclusivePlayer: Player) -> boolean,
-	UnbindExclusiveAccess: (self: UDataComponentRecord) -> boolean,
-	RefreshExclusiveAccess: (self: UDataComponentRecord) -> boolean,
-	IsExclusiveAccessBound: (self: UDataComponentRecord) -> boolean,
-	IsPlayerInExclusiveAccess: (self: UDataComponentRecord, PlayerThatAssumedExclusive: Player) -> boolean,
-	CreateValidation: (self: UDataComponentRecord, ValidationFunction: (ValidationDummy: UDataComponentValidationDummy) -> any) -> (),
-	Unarchive: (self: UDataComponentRecord, Attempts: number?, YieldTime: number?) -> boolean,
-	OnConnect: (self: UDataComponentRecord) -> UDataComponentCallbackFunctions,
-	SwapTransaction: (self: UDataComponentRecord, OtherPlayerData: UDataComponentRecord, Transaction: (ThisCurrentData : UDataComponentEditor, OtherCurrentData : UDataComponentEditor) -> ()) -> boolean,
-	SmartCleanCache: (self: UDataComponentRecord, Interval: number?) -> (),
-	EndCacheCleaning: (self: UDataComponentRecord) -> (),
-	GetVersion: (self: UDataComponentRecord) -> number,
-	BroadcastCurrentData: (self: UDataComponentRecord, BroadcastName: string, DetailedThings: any?) -> boolean,
-	WaitForBroadcastPacket: (self: UDataComponentRecord, BroadcastName: string) -> UDataComponentBroadcast,	
-	SendLocalBroadcast: (self: UDataComponentRecord, LocalBroadcastName: string, Password: string, DetailedThings: any?) -> boolean,
-	ListenToLocalBroadcast: (self: UDataComponentRecord, LocalBroadcastName: string, Password: string, Callback: (Key: string, BroadcastData: UDataComponentBroadcast) -> ()) -> (),
-	CloseLocalBroadcastListener: (self: UDataComponentRecord, LocalBroadcastName: string, Password: string) -> (),
+-- State Machines:
+--[[
+	"Asleep" -> where the record is not owned by any server or remaining untouched, or the data has been unarchived
+	"WakingUp" -> where the record is claimed by a server, but not ready to be used yet
+	"Ready" -> where the record is ready to be used
+	"Running" -> where the record is proceed to saving the data, and return to Ready again after saving process stopped
+	"Sleeping" -> where the record is failed to be ready, so the record fall asleep again, but in condition that data has been loaded but unready
+	"Died" -> where the record is getting detached/removed/archived, along the release
+--]]
+
+-- Data Structure:
+--[[
+PlayerRecord:
+	__version : number -> Version of current data
+	__bounds : {Bindings} -> Information about the bound of this data
+		-- id : number -> ID of the player who owns this data
+		-- since : number -> Time since this player bound or own this data
+		-- lastheartbeat : number -> Time since the last heartbeat sent for this data, meaning the server is still alive
+		-- serverid : string? -> ServerID (JobID) of this data, where this id contains the id of server who claimed this data
+	__data : any -> Data of this player
+	__flag : string (should be char) -> flag that indicates whether the data of this record was compressed ('C') or real ('R'), so that UDC will handle it
 	
-	Key : string | number,
-	Owner : Player?,
-	IsArchived : boolean
-}
+	some other things
+	__password : string (COMING SOON)
+--]]
 
-export type UDataComponentCallbackConnection = {
-	Disconnect: (self: UDataComponentCallbackConnection) -> (),
-	DisconnectAfterCalled: (self: UDataComponentCallbackConnection) -> (),
-	Wait: (self: UDataComponentCallbackConnection) -> (string, any),
-	IsConnected: (self: UDataComponentCallbackConnection) -> boolean,
-}
-
-export type UDataComponentCallbackFunctions = {
-	OnDataLoading: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
-	OnDataLoaded: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
-	OnDataSaving: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
-	OnDataSaved: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
-	OnDataArchived: (self: UDataComponentCallbackFunctions, Callback: (Key: string, ArchivedData: any) -> ()) -> UDataComponentCallbackConnection,
-	OnDataUnarchived: (self: UDataComponentCallbackFunctions, Callback: (Key: string, UnarchivedData: any) -> ()) -> UDataComponentCallbackConnection,
-	OnDataRecovery: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
-	OnDataCached: (self: UDataComponentCallbackFunctions, Callback: (Key: string, CurrentData: any) -> ()) -> UDataComponentCallbackConnection,
-	OnDataRemoved: (self: UDataComponentCallbackFunctions, Callback: (Key: string, RemovedData: any) -> ()) -> UDataComponentCallbackConnection,
-	OnDataBinding: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Data: any) -> ()) -> UDataComponentCallbackConnection,
-	OnDataUnbinding: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Data: any) -> ()) -> UDataComponentCallbackConnection,
-	OnDataBindExpired: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
-	OnDataBindRefreshed: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
-	OnCacheCleaned: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
-	OnTransactionBegin: (self: UDataComponentCallbackFunctions, Callback: (Key: string, WithKey: string) -> ()) -> UDataComponentCallbackConnection,
-	OnTransactionFiltered: (self: UDataComponentCallbackFunctions, Callback: (WhoKey: string, FilteredObject: any) -> ()) -> UDataComponentCallbackConnection,
-	OnTransactionEnded: (self: UDataComponentCallbackFunctions, Callback: (Key: string, WithKey: string, Results: any) -> ()) -> UDataComponentCallbackConnection,
-	OnReleased: (self: UDataComponentCallbackFunctions, Callback: (Key: string) -> ()) -> UDataComponentCallbackConnection,
-	OnDataError: (self: UDataComponentCallbackFunctions, Callback: (Key: string, Reason: string) -> ()) -> UDataComponentCallbackConnection,
-	OnSendingBroadcast: (self: UDataComponentCallbackFunctions, Callback: (Key: string, BroadcastName: string, BroadcastData: UDataComponentBroadcast) -> ()) -> UDataComponentCallbackConnection,
-	OnReceivingBroadcast: (self: UDataComponentCallbackFunctions, Callback: (Key: string, BroadcastName: string, BroadcastData: UDataComponentBroadcast) -> ()) -> UDataComponentCallbackConnection,
-	OnLocalBroadcastListenerReady: (self: UDataComponentCallbackFunctions, Callback: (Key: string, LocalBroadcastName: string) -> ()) -> UDataComponentCallbackConnection,
-	OnLocalBroadcastListenerCalled: (self: UDataComponentCallbackFunctions, Callback: (Key: string, LocalBroadcastName: string) -> ()) -> UDataComponentCallbackConnection,
-	OnLocalBroadcastListenerClosed: (self: UDataComponentCallbackFunctions, Callback: (Key: string, LocalBroadcastName: string) -> ()) -> UDataComponentCallbackConnection
-}
-
-export type UDataComponentInfo = {
-	GetPlayerData: (self: UDataComponentInfo, Key: string | number, Callbacks: {UDataComponentCallbackFunctions?}) -> UDataComponentRecord,
-	GetLocalData: (self: UDataComponentInfo, Callbacks: {UDataComponentCallbackFunctions?}) -> UDataComponentRecord,
-	GetDataStoreName: (self: UDataComponentInfo) -> string | number,
-
-	Enabled : boolean,
-	ValidationEnabled : boolean,
-	CallbackEnabled : boolean,
-	RequestTimestampCooldown : number,
-	WALEnabled : boolean,
-	DefaultDataLoadingAttempts : number,
-	DefaultDataLoadingYieldDuration : number,
-	DefaultSaveAttempts : number,
-	DefaultYieldAttempts : number,
-	MaxKeyLength : number,
-	BackupEnabled : boolean,
-	BackupYieldDuration : number,
-	StrictlyUnallowDetaching : boolean,
-	BackupRemovedWhenDetached : boolean,
-	AutoSaveEnabled : boolean,
-	AutoSaveInterval : number,
-	WALDataSuffix : string,
-	WALMaxEntries : number,
-	BackupDataSuffix : string,
-	ExclusiveAccessEnabled : boolean,
-	ExclusiveAccessExpiration : number,
-	SwappingEnabled : boolean,
-	SwappingCooldown : number,
-	CacheCleaningEnabled : boolean,
-	CacheCleaningInterval : number,
-	DataBlueprint : {any?},
-	ErrorReasonNamespace : string,
-	LocalDataNamespace : string,
-	MessagingEnabled : boolean,
-	MessagingNamespace : string,
-	MessagingCooldown : number,
-	MessagingSendingCooldown : number,
-	MessagingReceivingCooldown : number,
-	MessagingLocalListeningCooldown : number,
-	ServerClaimerSuffix : string,
-	ArchivationEnabled : boolean,
-	ArchivationSuffix : string,
-	MessagingDebugEnabled : boolean,
-	MaxDataSavingPerTick : number,
-}
-
-export type UDataComponentEditor = {
-	Give: (self: UDataComponentEditor, ThisData: any, Value: any) -> (),
-}
-
-export type UDataComponentBroadcast = {
-	Key : string | number,
-	Data : any,
-	BroadcasterJobId : number,
-	BroadcasterUserId : number,
-	BroadcastTime : number,
-	Other : any
-}
-
+-- Standard UDataComponent level
 export type UDataComponent = {
-	InDataInfo: (DataStoreName: string, Scope: string?, Configurations: {any?}) -> UDataComponentInfo,
-	QuickSetup: (DataStoreName: string, Scope: string?, Configurations: {any?}) -> UDataComponentInfo,
+	InDataInfo: (DataStoreName: string, Scope: string?, Configurations: {[string]: any}?) -> UDCInfo,
+	-- This is where you will use a data info to access into info and record
+	-- @param: DataStoreName: string -> Name of the data store
+	-- @param: Scope: string? -> Scope of the data store
+	-- @param: Configurations: {[string]: any}? -> Configurations of the data store
+	-- @return: UDCInfo -> Info of the data store
+
+	IsAlive: () -> boolean,
+	-- This is to check whether the UDataComponent and DataStore are alive or not
+	-- @param: UDC: UDataComponent -> UDataComponent to check
+	-- @return: boolean -> If the UDataComponent is alive or not
+
+	-- Configurations
+	Enabled : boolean, -- If this UDataComponent enabled to alive
 }
 
-local function InPlayerData(meta, Key)
-	assert(typeof(meta) == "table", "InPlayerData must be called from a UDataComponentInfo object")
-	assert(typeof(Key) == "string" or typeof(Key) == "number", "Key must be a string or id")
+-- Info level, where UDataComponent see the configurations
+export type UDCInfo = {
+	Name: string, -- Name of the data store from this info
+	Scope: string, -- Scope of the data store from this info
 
-	local record = {}
-	record.Key = Key
-	record.Owner = nil
-	record.IsArchived = false
+	GetCurrentRecord: (UDCInfo: UDCInfo, Key: number | string, OwnerOfThisData: Player) -> UDCRecord,
+	-- This is where the record of player's data is obtained:
+	-- @param: Key: number | string -> Key of the record of this player
+	-- @param: OwnerOfThisData: Player -> Player who owns this data, prevent other servers or other player to obtain or commit the data
+	ViewCurrentRecord: (UDCInfo: UDCInfo, Key: number | string, Version: string?) -> UDCRecord,
+	-- This is where you can view the record of player's data, also showing owner and version
+	-- @param: Key: number | string -> Key of the record of this player
+	-- @param: Version: string? -> Version of the record of this player, if not specified, the latest version will be viewed
+	GetLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
+	-- This is where the record of local data is obtained
+	-- You can say, in UDC, local data is just "global data of this data store" or "global record"
+	ViewLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
+	-- This is where you can view the record of local data
 
-	local function dispatch(key, eventName, ...)
-		if not meta.CallbackEnabled then return end
-		
-		local args = table.pack(...)
-		local callbacks = meta._UDataComponentDynamicCallbacks:Get(eventName)
+	-- Configurations
+	Enabled : boolean, -- If this UDataComponent's info enabled to be used 
+	ValidationEnabled : boolean, -- If this UDataComponent's info allowed to validate the data that came from commit
+	CallbackEnabled : boolean, -- If this UDataComponent's info allowed to fire callback functions
+	WALEnabled : boolean, -- If this UDataComponent's info allowed to use Write Ahead Logging, WAL called at fatal-points, like server shutdown or player leaving with save queue pended
+	DataWritingCooldown : number, -- Cooldown between each data write
+	MaxKeyLength : number, -- Maximum key-length for each keys
+	BackupEnabled : boolean, -- If this UDataComponent's info allowed to call backup data when fatal error occurs
+	DefaultBackupAttempts : number, --  Strictly gives some attempts to get the data-backup when normal load failed
+	DefaultBackupYieldDuration : number, -- Yield duration between each attempt of get the data-backup
+	StrictlyUnallowDetaching : boolean, -- If this UDataComponent's info unallowed to remove/archive current data
+	AutoSaveEnabled : boolean, -- If this UDataComponent's info allowed to auto-save data in background
+	AutoSaveInterval : number, -- Interval between each auto-save
+	WALDataSuffix : string, -- Suffixed to the DataStore name for the WAL
+	OwnershipExpiration : number, -- Duration for the data's ownership, where the player can holds the data and server claiming current data to other servers
+	SwappingEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
+	SwappingCooldown : number, -- Cooldown between each swap
+	CacheCleaningEnabled : boolean, -- If this UDataComponent's info allowed to clean up the cache
+	CacheCleaningInterval : number,-- Interval between each cache cleaning
+	DataBlueprint : {any?}, -- Blueprint for the data, where when a new player joins, the data will be filled with the blueprint as template or first data
+	ErrorReasonNamespace : string, -- Namespace for the error reasons
+	CompressionLevel : number, -- Compression level for the data
+	CompressionThreshold : number, -- Threshold for the data to be compressed, in bytes
+	CompressionQueueCooldown : number, -- Cooldown between each compression
+	MaxDecompressedSize : number, -- Maximum size for the data to be compressed, in bytes
+	LocalDataNamespace : string, -- Namespace for the local record level
+	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
+	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
+	MessagingExpiration : number, -- Duration for the broadcast to expire
+	MessagingMaxPacketSize : number, -- Maximum size for the broadcast message
+	MessagingSendingCooldown : number, -- Cooldown for sending the broadcast informations
+	MessagingReceivingCooldown : number, -- Cooldown for listening the broadcast messages
+	MessagingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
+	ArchivationEnabled : boolean, -- If this UDataComponent's info allowed to use archivation, where the data will be moved to the archived data store after detaching
+	ArchivationSuffix : string, -- Suffixed to the DataStore name for the archived data,
+	MaxDataSavingPerTick : number, -- Maximum data saving per tick in FIFO queue,
+	MaxDataObtainingPerTick : number, -- Maximum data obtaining per tick in FIFO queue,
+	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
+	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
+	MaxConcurrentAutosaveWorkers : number, -- Maximum concurrent autosave workers
+	MaxStandbyWorkers : number, -- Maximum concurrent workers in standby when trying to commit data when shutdown
+	StaleServerClaimingTime : number, -- Duration for the server to claim the data of other server
+	ShutdownSecondsToken : number, -- Duration for the shutdown seconds remaining to prevent data loss
+}
 
-		local suc, err = pcall(function()
-			local callbacks = meta._UDataComponentCallbacks:Get(eventName)
+-- info level helper for internal...
+export type __UDCInfo_Internal = {
+	Name: string, -- Name of the data store from this info
+	Scope: string, -- Scope of the data store from this info
 
-			if callbacks then
-				local callback = callbacks[key]
-				if not callback then return end
+	GetCurrentRecord: (UDCInfo: UDCInfo, Key: number | string, OwnerOfThisData: Player) -> UDCRecord,
+	-- This is where the record of player's data is obtained:
+	-- @param: Key: number | string -> Key of the record of this player
+	-- @param: OwnerOfThisData: Player -> Player who owns this data, prevent other servers or other player to obtain or commit the data
+	ViewCurrentRecord: (UDCInfo: UDCInfo, Key: number | string) -> UDCReadOnlyRecord,
+	-- This is where you can view the record of player's data, also showing owner and version
+	-- @param: Key: number | string -> Key of the record of this player
+	GetLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
+	-- This is where the record of local data is obtained
+	-- You can say, in UDC, local data is just "global data of this data store" or "global record"
+	ViewLocalRecord: (UDCInfo: UDCInfo) -> UDCReadOnlyRecord,
+	-- This is where you can view the record of local data
 
-				callback(key, table.unpack(args))
-			end
-		end)
+	_CurrentDataStore : DataStore,
+	_CurrentWALDataStore : DataStore,
+	_CurrentArchivedDataStore : DataStore,
 
-		if not suc then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's callback error happened, reason: " .. tostring(err))
+	_CompressedBlueprint : { any },
+
+	_WriteTimestamp : { any? },
+	_SwapTimestamp : { any? },
+	_AutosaveTimestamp : { any? },
+	_SavePendingQueue : { any? },
+	_ObtainPendingQueue : { any? },
+	_BroadcastPendingQueue : { any? },
+	_UnreadyData : { any? },
+	_DataCache : { any? },
+	_CompressionStack : { any? },
+	_StandbyRegistry : { any? },
+	_DirtySave : { any? },
+	_LockSessions : any,
+	_BroadcastingTimestamps : { any? },
+	_LocalBroadcastListeners : { any? },
+
+	_ExclusiveTimerCalled : boolean,
+	_ShutdownCalled : boolean,
+	_ExclusiveSafetyCalled : boolean,
+	_IsSaveRunning : boolean,
+	_IsObtainingRunning : boolean,
+	_IsCompressionTimerRunning : boolean,
+	_CacheCleaningCalled : boolean,
+	_StandbyReady : boolean,
+	_RecordBroadcastCalled : boolean,
+	_BroadcastQueueRunning : boolean,
+
+	_CurrentLoadWorkers : number,
+	_CurrentSaveWorkers : number,
+	_CurrentAutoSaveWorkers : number,
+
+	_TrackedValidations : { any? },
+	_TrackedSchemas : { any? },
+	_TrackedClamps : { any? },
+
+	_UDataComponentDynamicCallbacks : { any? },
+
+	-- Configurations
+	Enabled : boolean, -- If this UDataComponent's info enabled to be used 
+	ValidationEnabled : boolean, -- If this UDataComponent's info allowed to validate the data that came from commit
+	CallbackEnabled : boolean, -- If this UDataComponent's info allowed to fire callback functions
+	WALEnabled : boolean, -- If this UDataComponent's info allowed to use Write Ahead Logging, WAL called at fatal-points, like server shutdown or player leaving with save queue pended
+	DataWritingCooldown : number, -- Cooldown between each data write
+	MaxKeyLength : number, -- Maximum key-length for each keys
+	BackupEnabled : boolean, -- If this UDataComponent's info allowed to call backup data when fatal error occurs
+	DefaultBackupAttempts : number, --  Strictly gives some attempts to get the data-backup when normal load failed
+	DefaultBackupYieldDuration : number, -- Yield duration between each attempt of get the data-backup
+	StrictlyUnallowDetaching : boolean, -- If this UDataComponent's info unallowed to remove/archive current data
+	AutoSaveEnabled : boolean, -- If this UDataComponent's info allowed to auto-save data in background
+	AutoSaveInterval : number, -- Interval between each auto-save
+	WALDataSuffix : string, -- Suffixed to the DataStore name for the WAL
+	OwnershipExpiration : number, -- Duration for the data's ownership, where the player can holds the data and server claiming current data to other servers
+	SwappingEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
+	SwappingCooldown : number, -- Cooldown between each swap
+	CacheCleaningEnabled : boolean, -- If this UDataComponent's info allowed to clean up the cache
+	CacheCleaningInterval : number,-- Interval between each cache cleaning
+	DataBlueprint : {any?}, -- Blueprint for the data, where when a new player joins, the data will be filled with the blueprint as template or first data
+	ErrorReasonNamespace : string, -- Namespace for the error reasons
+	CompressionLevel : number, -- Compression level for the data, 1-22, default 10
+	CompressionThreshold : number, -- Threshold for the data to be compressed, in bytes
+	CompressionQueueCooldown : number, -- Cooldown for the compression queue
+	MaxDecompressedSize  : number, -- Maximum size for the data to be compressed, in bytes
+	LocalDataNamespace : string, -- Namespace for the local record level
+	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
+	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
+	MessagingExpiration : number, -- Duration for the broadcast to expire
+	MessagingMaxPacketSize : number, -- Maximum size for the broadcast packet, in bytes
+	MessagingSendingCooldown : number, -- Cooldown for sending the broadcast informations
+	MessagingReceivingCooldown : number, -- Cooldown for listening the broadcast messages
+	MessagingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
+	ArchivationEnabled : boolean, -- If this UDataComponent's info allowed to use archivation, where the data will be moved to the archived data store after detaching
+	ArchivationSuffix : string, -- Suffixed to the DataStore name for the archived data,
+	MaxDataSavingPerTick : number, -- Maximum data saving per tick in FIFO queue,
+	MaxDataObtainingPerTick : number, -- Maximum data obtaining per tick in FIFO queue,
+	MaxConcurrentSaveWorkers : number, -- Maximum concurrent save workers
+	MaxConcurrentLoadWorkers : number, -- Maximum concurrent load workers
+	MaxConcurrentAutosaveWorkers : number, -- Maximum concurrent autosave workers
+	MaxStandbyWorkers : number, -- Maximum concurrent workers in standby when trying to commit data when shutdown
+	StaleServerClaimingTime : number, -- Duration for the server to claim the data if the owner is unknown
+	ShutdownSecondsToken : number, -- Duration for the shutdown seconds token, where the server will not save the data after this duration
+}
+
+-- Record level, where the data record is accessed here
+export type UDCRecord = {
+	Key: number | string, -- Key of this data
+	Owner: Player?, -- Player who owns this record
+	IsArchived: boolean, -- If this record was detached and archived
+	Event: UDCEvent, -- Utils for the events
+	Validation: UDCValidation, -- Utils for the validation
+	Swap: UDCSwap, -- Utils for the swap
+	Broadcasting: UDCBroadcasting, -- Utils for the messaging
+	Version: number, -- Version of this data
+	Data: any?, -- Loaded Data that has been loaded, this is a clone from the actual data/cache, where this must be a read-only member
+	CurrentState: string, -- Current state of this data, can be: "Asleep", "WakingUp", "Ready", "Running", "Sleeping", "Died"
+
+	-- These are two Write functions, with two types too: Normal and Force
+	-- Normal is when you writing the data with cooldown and lock, especially when the data is pending into queue to be commited
+	-- Force is when you don't care about the cooldown and lock, and will be commited immediately
+
+	-- For safe writing data session, use Normal, and for immediate case, use Force
+	-- For normal, before even the commiting, it will be cached first, in case the read data is changed for the next usage after the write session
+
+	Awake: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) IMPORTANT POINT, this load the record from the datastore, and must be called when player is joing the experience
+	-- @return boolean -- Status of the loading the data, true if success
+
+	Ready: (UDCRecord: UDCRecord, FindingPlayerTimeout: number?) -> boolean, -- (Suspending) IMPORANT POINT, this must be called before the data can be used, where UDC is evaluating everything fromn the data and ownership, before the data can be used
+	-- @return boolean -- Status when the data of this player is ready after evaluating and hard-checking, if true the data is ready to be used
+
+	Standby: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) IMPORTANT POINT, this will be called automatically when player is leaving the experience, or server shutdown, where the data will be saved and released, must be called after the record is ready, which after "Ready()" returns true. 
+	-- This will use WAL to save data, to prevent request "Boom", and will easily and automatically recovered by UDC from Awake()
+
+	Sleep: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) IMPORTANT POINT, this is where you can release the bounds of this server from data, then commited into datastore
+	-- @info -- You can call this when you're needing a manual control over releasing session, meanwhile this was called automatically when Standby() triggered
+	-- @return boolean -- Status of the releasing the data, true if success
+
+	Save: (UDCRecord: UDCRecord, Data: any, SegmentIndex: number?) -> boolean, -- (Suspending) this is saving data where the data must be an over-all data, which is the previous record that haven't been edited also must be saved too, will pushed into save pending queue then changed the read data
+	-- @param Data: any? -- Custom data to commit, or saving whole data.
+	-- @param SegmentIndex: number? -- Where the current data is contained in an index to
+	-- @return boolean -- Status of the saving data, true if success, but true in here isn't meaning the data is actually commited
+
+	Write: (UDCRecord: UDCRecord, WritingFunction: (CurrentData: any) -> ()) -> boolean, -- (Suspending) this is how you can save the data with partial update, where you don't need to commit all data to write when you just need one or two or more datas to edit
+	-- @param WritingFunction: (CurrentData: any) -> () -- Function that used as Write session over the data
+	-- @return boolean -- Status of the writing data, true if success, but true in here isn't meaning the data is actually commited
+
+	ForceSave: (UDCRecord: UDCRecord, Data: any, SegmentIndex: number?) -> boolean, -- (Suspending) same as record:Save(...), but this will commit into datastore immediately
+	-- @param Data: any -- Data to commit
+	-- @param SegmentIndex: number? -- Where the current data is contained in an index to
+	-- @return boolean -- Status of the saving data, true if success
+
+	COMINGSOON_Enter: (UDCRecord: UDCRecord, Password: string) -> boolean, -- (Suspending) that tries to enter into the record with password of record that tried be entered with
+	-- This will steal the data from the previous owner, and will be locked for current server session.
+	-- @important -- When you use this function to steal the record ownership, make sure you're also release the session after used the record. So, the original owner can use its record back
+	-- @param Password: string -- Password for stealer record to enter into the desired record, the password is held by original owner
+	-- @return boolean -- Status of the entering the record, true if success
+
+	COMINGSOON_GenerateLogin: (UDCRecord: UDCRecord, ThisRecordPassword: string) -> boolean, -- (Suspending) makes a password for this record, where "stealer" server needs to input this password before could enter into the record by another server session
+	-- GenerateLogin also acts as "this record can be stolen" or "open source" to another server or another record, without generating login with this. Current Record guaranteed to be safe from session stealing
+	-- @important -- Generating login would cause this record to be corrupted when some servers that tried to steal session of this record, use this carefully and always to release the data after steal the ownership 
+	-- @param ThisRecordPassword: string -- Key or password for this record to be stolen with
+	-- @return boolean -- Status if the record is successfully generated the login and allowed to be stolen
+
+	COMINGSOON_DestroyLogin: (UDCRecord: UDCRecord, Password: string) -> boolean, -- (Suspending) destroy the password and login session of this record, so other servers can't enter or steal this record
+	-- @important -- When you tried to destroy the login session of this record, meanwhile the stealer was from another server, you can't do it, you can only destroy the login session by original server
+	-- @important -- You can only release the record from original server, not server that stole the record
+	-- @param Password: string -- Safety key before destroying the login session of this record
+	-- @return boolean -- Status of the destroying the login session, true if success
+
+	ForceWrite: (UDCRecord: UDCRecord, WritingFunction: (CurrentData: any) -> ()) -> boolean, -- (Suspending) same as record:Write(...), but this will commit into datastore immediately
+	-- @param WritingFunction: (CurrentData: any) -> () -- Function that used as Write session over the data
+	-- @return boolean -- Status of the writing data, true if success
+
+	Detach: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) DANGEROUS, this will destroy/erase the record data from datastore and cache, but if archivation is true, the data will be archived
+	-- @return boolean -- Status of the erasing the data, true if successfully detached/removed the data
+
+	Unarchive: (UDCRecord: UDCRecord) -> boolean, -- (Suspending) Call the removed data from datastore, where the data will be immediately written into cache
+	-- @return boolean -- Status of the unarchiving data, true if success
+
+	IsRecorded: (UDCRecord: UDCRecord) -> boolean, -- Check if the record is still exist in datastore
+	-- @return boolean -- True if the record is still exist in datastore
+}
+
+export type UDCEvent = {
+	OnReleased: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is released, actually happened by Sleep() call or Standby() triggers
+	OnReady: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is ready to be used, actually happened by Ready()
+	OnSaved: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is saved, actually happened when the data of record finally commited to datastore
+	OnLoaded: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is loaded, actually happened by Awake()
+	OnStandby: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is on standby action, actually happened by Standby()
+	OnAutoSaved: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is being commited automatically by autosave, happened every autosave interval kicks in
+	OnArchived: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is being detached or archived or removed, happened by Detach()
+	OnUnarchived: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is finally unarchived, happened by Unarchive()
+
+	OnWrite: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the data of the record has been modified before commited, actually happened by Write() or Save() or Force*()
+
+	OnBroadcastSent: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is sent to other server with messaging, actually happened by BroadcastCurrentData()
+	OnBroadcastReceived: (UDCEvent: UDCEvent, Callback: (Key: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
+	-- happened when the record is received from other server by messaging, this is where you can receive the broadcast packet from a broadcaster server
+
+	OnRecordBroadcastReceived: (UDCEvent: UDCEvent, Callback: (Key: string | number, BroadcasterKey: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
+	-- happened when a record broadcasting to another record in another server, this is where you can receive the record's broadcasting data
+
+	OnError: (UDCEvent: UDCEvent, Callback: (Key: string | number, Error: string) -> any) -> UDCEventConnector,
+	-- happened when the record is having error in message
+	OnDataFiltered: (UDCEvent: UDCEvent, Callback: (Key: string | number, FilteredData: string | number) -> any) -> UDCEventConnector,
+	-- happened when the record is getting filtered by validation, happened when loaded or Write()
+
+	OnOwnershipExpired: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
+	-- happened when the ownership of this record expired when preparing
+}
+
+export type UDCValidation = {
+	AddPredicate: (UDCValidation: UDCValidation, ThisData: string | number, Predicate: (ThisValue: any) -> (), Penetration: number?) -> (),
+	-- Adding validation function where current data must be operating on the exact predicate, if not, the data is invalid to operate
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param Predicate: (ThisValue: any) -> () -- Validation function, ThisValue is the value of the data
+	-- @param Penetration: number? -- Penetration level, default is 1, penetration means that step's access of data if the record was having same data name/index
+
+	-- For Penetration, 1 does mean that when there is two same data name, like Data = { Data = ... }. It will access Data's data with table value, when you set it to 2, it will access Data's data inside through
+
+	RemovePredicate: (UDCValidation: UDCValidation, ThisData: string | number, PenetrationIndex: number?) -> (),
+	-- Removing predicate function of validation
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param PenetrationIndex: number? -- Default is 1, removing the validation tag of current data in record
+
+	RemoveAllPredicates: (UDCValidation: UDCValidation) -> (),
+	-- Removing all predicate function of validation
+
+	AddSchema: (UDCValidation: UDCValidation, ThisData: string | number, Schema: string, Penetration: number?) -> (),
+	-- Adding schema/type to validate the data, if the data is not match the schema, it will be invalid
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param Schema: string -- String that will be used for checking the data type
+	-- @param Penetration: number? -- Penetration level, default is 1, penetration means that step's access of data if the record was having same data name/index
+
+	RemoveSchema: (UDCValidation: UDCValidation, ThisData: string | number, PenetrationIndex: number?) -> (),
+	-- Removing schema of current data in record
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param PenetrationIndex: number? -- Default is 1, removing the validation tag of current data in record
+
+	RemoveAllSchemas: (UDCValidation: UDCValidation) -> (),
+	-- Removing all schema of validation
+
+	AddClamp: (UDCValidation: UDCValidation, ThisData: string | number, Min: number?, Max: number?, Penetration: number?) -> (),
+	-- Adding clamp to validate the data, if the data is out of bound, it will be clamped through min or max
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param Min: number? -- Minimum value of the data
+	-- @param Max: number? -- Maximum value of the data
+	-- @param Penetration: number? -- Penetration level, default is 1, penetration means that step's access of data if the record was having same data nam
+
+	-- If you want to set Min function to the data, just set Max to nil, same methods if you set Max instead
+
+	RemoveClamp: (UDCValidation: UDCValidation, ThisData: string | number, PenetrationIndex: number?) -> (),
+	-- Removing clamp of current data in record
+	-- @param ThisData: string | number -- Data name or index of data
+	-- @param PenetrationIndex: number? -- Default is 1, removing the validation tag of current data in record
+
+	RemoveAllClamps: (UDCValidation: UDCValidation) -> (),
+	-- Removing all clamps of validation
+}
+
+export type UDCSwap = {
+
+}
+
+export type UDCBroadcasting = {
+	BroadcastCurrentData: (UDCBroadcasting: UDCBroadcasting, OtherThings: any?) -> boolean,
+	-- Global broadcasting the data to all servers
+	WaitForBroadcastPacket: (UDCBroadcasting: UDCBroadcasting, Timeout: number?) -> UDCBroadcastingPacket,
+	-- (ULTIMATELY SUSPENDING) Waiting for global broadcast packet from other server
+	SendLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, OtherThings: any?) -> boolean,
+	-- Sending local broadcast to other server that listening on the channel
+	ListenToLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCListenerConnector,
+	-- Listening for local broadcast from other server
+	SendBroadcastToRecord: (UDCBroadcasting: UDCBroadcasting, TargetKey: string | number, OtherThings: any) -> boolean
+	-- Sending broadcast to specific record in other server
+}
+
+export type UDCBroadcastingPacket = {
+	BroadcasterKey: string | number, -- record's key who broadcasted
+	BroadcasterData: any, -- record's data of broadcaster
+	BroadcasterServerId: string, -- broadcaster record's current server id 
+	BroadcasterOwnerId: number, -- the owner id of the record
+	BroadcastTime: number,	 -- timestamp of broadcasting
+	OtherThings: any?, -- other things you want to send with the broadcast
+}
+
+export type UDCEventConnector = {
+	Wait: (self: UDCEventConnector) -> any,
+	Disconnect: (self: UDCEventConnector) -> (),
+	DisconnectAfterCalled: (self: UDCEventConnector) -> (),
+}
+
+export type UDCListenerConnector = {
+	Disconnect: (self: UDCListenerConnector) -> (),
+}
+
+export type UDCReadOnlyRecord = {
+	Version: number,
+	Owner: Player?,
+	Data: { any? },
+}
+
+-- finding the index of standby registry
+local function find_standby_index(meta : __UDCInfo_Internal, key)
+	for i, v in ipairs(meta._StandbyRegistry) do
+		if v.Key == key then
+			return i
 		end
+	end
+end
 
-		if callbacks then
-			local callback = callbacks[key]
-			if not callback then return end
+-- automatic compression, by checking if there is an overhead if compressed or not
+local function compare_and_compress(meta : __UDCInfo_Internal, data : { any? })
+	local buff, flag = Compressor.TryToCompress(data, meta.CompressionLevel, meta.CompressionThreshold)
 
-			local potentials = {}
-			for id, cb in pairs(callback) do
-				table.insert(potentials, cb)
-			end
+	return buff, flag
+end
 
-			for _, cb in ipairs(potentials) do
-				local dysuc, dyerr = pcall(cb, key, table.unpack(args))
-				if not dysuc then 
-					warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's callback error happened, reason: " .. tostring(dyerr))
-				end
-			end
-		end
+local function compare_broadcast_payload(meta : __UDCInfo_Internal, rawData : any)
+	local success, data, flag = pcall(Compressor.TryToCompress, rawData, meta.CompressionLevel, meta.CompressionThreshold)
+	
+	if not success then
+		return nil, nil
 	end
 	
-	local function encrypt(text, key)
-		if text == "" or key == "" then
-			return ""
-		end
-		
-		local encrypted = {}
-		local length = #key
-		for i = 1, #text do
-			local t = string.byte(text, i)
-			local k = string.byte(key, (i - 1) % length + 1)
-			encrypted[i] = string.char(bit32.bxor(t, k))
-		end
-		
-		return table.concat(encrypted)
+	return data, flag
+end
+
+local function can_send_broadcast(meta : __UDCInfo_Internal)
+	local now = workspace:GetServerTimeNow()
+	local timestamps = meta._BroadcastingTimestamps
+
+	while #timestamps > 0 and now - timestamps[1] > 60 do
+		table.remove(timestamps, 1)
 	end
 
-	local function deepclone(tab)
-		if typeof(tab) ~= "table" then
-			return tab
-		end		
-		local newTab = {}
+	local limit = math.min(150 + (#Players:GetPlayers() * 10), 250)
+	return #timestamps < limit
+end
 
-		for k, v in pairs(tab) do
-			newTab[k] = deepclone(v)
-		end
+local function record_broadcast_sent(meta : __UDCInfo_Internal)
+	table.insert(meta._BroadcastingTimestamps, workspace:GetServerTimeNow())
+end
 
-		return newTab
+local function deepclone(tab, seen)
+	if typeof(tab) ~= "table" then
+		return tab
+	end
+	seen = seen or {}
+	if seen[tab] then return seen[tab] end
+
+	local newTab = {}
+	seen[tab] = newTab
+
+	for k, v in pairs(tab) do
+		newTab[k] = deepclone(v, seen)
 	end
 
-	local function get_blueprint()
-		return deepclone(meta.DataBlueprint)
+	return newTab
+end
+
+local function deepfreeze(tab, frozen)
+	if typeof(tab) ~= "table" then
+		return tab
+	end
+	frozen = frozen or {}
+	if frozen[tab] then return frozen[tab] end
+
+	local copy = {}
+	frozen[tab] = copy
+
+	for k, v in pairs(tab) do
+		copy[k] = deepfreeze(v, frozen)
 	end
 
-	local function is_still_exclusive(key, strid)
-		assert(typeof(strid) == "string")
+	table.freeze(copy)
+	return copy
+end
 
-		local days = meta.ExclusiveAccessExpiration
-		local now = workspace:GetServerTimeNow()
-		local dayInSec = 60 * 60 * 24
+---- for deepcloning table
+--local function deepclone(tab, seen)
+--	if typeof(tab) ~= "table" then
+--		return tab
+--	end
+--	seen = seen or {}
+--	if seen[tab] then return seen[tab] end
 
-		local timeout = dayInSec * days
+--	local newTab = {}
+--	seen[tab] = newTab
 
-		local id = tonumber(strid)
-		if id == nil then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to get the ID of player while trying to check the exlusive binding.")
-			return false
-		end
+--	for k, v in pairs(tab) do
+--		if newTab[k] == nil then
+--			newTab[k] = v
+--		elseif typeof(v) == "table" and typeof(newTab[k]) == "table" then
+--			newTab[k] = deepclone(v, seen)
+--		end
+--	end
 
-		local bound = meta._BoundRegistry[key]
-		if not bound then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed because the data isn't bound with this player.")
-			return false
-		end
+--	return newTab
+--end
 
-		local boundId, since = bound.UserId, bound.Since
-		if not id or not since then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to get ID or time since bound from this player.")
-			return false
-		end
+---- for deepcloning then deepfreezing table
+--local function deepfreeze(tab, frozen)
+--	if typeof(tab) ~= "table" then
+--		return tab
+--	end
+--	frozen = frozen or {}
+--	if frozen[tab] then return frozen[tab] end
 
-		return id == boundId and now - since < timeout
+--	local copy = {}
+--	frozen[tab] = copy
+
+--	for k, v in pairs(tab) do
+--		if typeof(v) == "table" then
+--			copy[k] = deepfreeze(v, frozen)
+--		else
+--			copy[k] = v
+--		end
+--	end
+
+--	table.freeze(copy)
+--	return copy
+--end
+
+-- to call event
+local function dispatch(meta : __UDCInfo_Internal, record : UDCRecord, eventName : string, ...)
+	if not meta.CallbackEnabled then
+		return
 	end
 
-	local function match_key(oriKey, strid : string)
-		local key = tostring(oriKey)
-		strid = tostring(strid)
+	local args = table.pack(...)
+	local ucallbacks = meta._UDataComponentDynamicCallbacks[eventName]
+	if not ucallbacks then return end
 
-		if key == "" or strid == "" then
-			dispatch(oriKey, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Empty key or id is not allowed.")
-			return false
+	local dynamicCallbacks = ucallbacks[record.Key]
+	if not dynamicCallbacks then return end
+
+	if dynamicCallbacks then
+		local matched = {}
+		for key, cb in pairs(dynamicCallbacks) do
+			table.insert(matched, cb)
 		end
 
-		local startpos, endpos = string.find(strid, key, 1, true)
-		if startpos == nil or endpos == nil then 
-			dispatch(oriKey, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to match key with id.")
-			return false 
-		end
-
-		local obtainedId = string.sub(strid, startpos, endpos)
-		if obtainedId == strid and is_still_exclusive(oriKey, strid) then
-			return true
-		end
-
-		dispatch(oriKey, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: The data of this key isn't bound with this player.")
-		return false
-	end
-
-	local function ensure_exc_player(key, player)
-		assert(typeof(player) == "Instance" and player:IsA("Player"))
-
-		if not meta.ExclusiveAccessEnabled then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Exclusive access is disabled.")
-			return false
-		end
-
-		if RunService:IsClient() then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: Currently trying to set player as exclusive, named " .. player.Name ..  ", but called from clientt.")
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Currently trying to set player as exclusive, named " .. player.Name ..  ", but called from client.")
-			return false
-		end
-
-		local strid = tostring(player.UserId)
-
-		return match_key(key, strid)
-	end
-
-	local function call_backup(backup)
-		local obtainedData = nil
-
-		if not meta.BackupEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Backup is disabled.")
-			return false, get_blueprint()
-		end
-
-		local _attempts = 0
-		repeat
-			local suc, err = pcall(function()
-				obtainedData = backup:GetAsync(Key)
+		for _, cb in pairs(matched) do
+			task.spawn(function()
+				local success, result = pcall(cb, record.Key, table.unpack(args))
+				if not success then
+					local format = string.format("[UDataComponent-InternalErr(%s-%s)]: %s", record.Key, eventName, result)
+					warn(format)
+				end
 			end)
+		end
+	end
+end
 
-			if not suc then
-				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Get error happened, reason: " .. tostring(err))
-				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to obtain data from backup, trying to get data again...")
+-- to call specific, OnError event, with message
+local function throw(meta : __UDCInfo_Internal, record : UDCRecord, message : string)
+	if message == "" or not message then
+		message = "No message"
+	end
+
+	local namespace = "[" .. meta.ErrorReasonNamespace .. "]: "
+	dispatch(meta, record, "OnError", namespace .. message)
+end
+
+-- to reconcile data, where the data will be reconciled with the blueprint
+local function reconcile(data : {any}, blueprint : {any})
+	for key, value in pairs(blueprint) do
+		if data[key] == nil then
+			data[key] = value
+		elseif typeof(value) == "table" and typeof(data[key]) == "table" then
+			reconcile(data[key], value)
+		end
+	end
+end
+
+-- finding a heart (value of a key) within a girl (table)
+local function find_element(girl : {any}, heart : any, tries : number?)
+	tries = tries or 1 -- tries is an index where the element can be found inside and obtained
+	-- As example:
+	--[[
+	You have a table like this:
+	{
+		Inventory = 
+		{
+			Inventory = 30,
+			...
+		}
+	}
+	
+	If you use default tries index or 1. You will return the "Inventory" element that has the table as value.
+	Regarding to the example above, if you want to get the "Inventory" element that has number value, you need to set the tries to 2.
+	
+	If there is no element that matches the needle, it will return nil
+	--]]
+
+	local count = 0
+	for key, value in pairs(girl) do
+		if key == heart then
+			count += 1
+
+			if count == tries then
+				return value, count
 			end
-
-			_attempts += 1
-			task.wait(meta.BackupYieldDuration or 3)
-		until _attempts >= meta.DefaultDataLoadingAttempts or obtainedData ~= nil
-
-		if obtainedData == nil then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot check the record of the data from this key from backup")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to obtain data from backup, switching data to template/blueprint")
-
-			return false, get_blueprint()
 		end
 
-		return true, obtainedData
+		if typeof(value) == "table" then
+			local element, subcount = find_element(value, heart, tries - count)
+			count += subcount
+
+			if element then
+				return element, count
+			end
+		end
 	end
 
-	local function write_data(data : DataStore, key, currentData)
-		local dataSuccess, err = pcall(function()
-			return data:UpdateAsync(key, function(old)
-				return currentData				
-			end)
-		end)
+	return nil, count
+end
 
-		if not dataSuccess then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent unable to write Data, reason: " .. tostring(err))
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data.")
+-- changing a heart (value of a key) with an intention (intended value) within a girl (table)
+local function change_element(girl : {any}, heart : any, intention : any, tries : number?)
+	tries = tries or 1 -- tries is an index where the element can be found inside and obtained
+	-- As example:
+	--[[
+	You have a table like this:
+	{
+		Inventory = {
+			Inventory = 30,
+			...
+		}
+	}
+	
+	If you use default tries index or 1. You will change the "Inventory" element that has the table as value, into your intended value.
+	Regarding to the example above, if you want to change the "Inventory" element that has number value, you need to set the tries to 2.
+	
+	It will return true if it's successfully changed, otherwise it will return false.
+	If you ever tries to out of the tries, it will return false of change nothing.
+	--]]
 
-			return false, nil, "write_data_failed"
+	local count = 0
+	for key, value in pairs(girl) do
+		if key == heart then
+			count += 1
+
+			if count == tries then
+				girl[key] = intention
+				return true, count
+			end
 		end
 
-		local clone = deepclone(currentData)
-		dispatch(key, "OnDataSaved", clone)
-		
-		return true, dataSuccess, "write_data_success"
+		if typeof(value) == "table" then
+			local success, subcount = change_element(value, heart, intention, tries - count)
+			count += subcount
+
+			if success then
+				return true, count
+			end
+		end
 	end
 
-	local function write_backup(backup : DataStore, key, currentData)
-		if not meta.BackupEnabled then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Backup is disabled.")
-			return false, nil, "backup_disabled"
-		end
+	return false, count
+end
 
-		local backupSuccess, err = pcall(function()
-			return backup:UpdateAsync(key, function(old)
-				return currentData				
-			end)
-		end)
+-- to load the data, where it's running in a session
+local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
+	local entry -- empty entry
 
-		if not backupSuccess then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent unable to write Data to backup, reason: " .. tostring(err))
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data to backup.")
-
-			return false, nil, "write_backup_failed"
-		end
-
-		return true, backupSuccess, "write_backup_success"
+	-- Checking if WAL Entry is exist
+	local ok, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
+	if meta.WALEnabled and ok and result then
+		-- Change the entry to the WAL Entry
+		entry = result
 	end
 
-	local function write_wal_optionally(wal : DataStore, data : DataStore, backup : DataStore, key, currentData)
-		if not meta.WALEnabled then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: WAL is disabled.")
-			return false, nil, "wal_disabled"
-		end
+	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	local now = workspace:GetServerTimeNow()
+	local attempts = 0
 
-		local walSuccess, err = pcall(function()
-			wal:UpdateAsync(key, function(old)
-				return currentData				
+	-- Use UpdateAsync to load data, also handle the WAL
+	local success, result
+	meta._LockSessions:Do(record.Key, function()
+		success, result = pcall(function()
+			return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+				-- Checking if current data have these bound elements
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+					local bounds = CurrentData.__bounds
+					local id = CurrentData.__bounds.id -- UserId of the player who owns this data
+					local serverid = CurrentData.__bounds.serverid -- ServerID (JobID) of server whose this data to commit
+					local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0 -- Time when the server claimed this data
+
+					-- Checking if the server is still alive
+					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
+
+					local isDifferentOwner = thisOwnerId ~= id -- Checking if the owner is different
+					local isDifferentServer = serverid and serverid ~= ServerId and not isStale -- Checking if the server is different and not dead/stale
+
+					-- If the data is owned by a different player or a different server, return nil to force an invalid result
+					if isDifferentOwner or isDifferentServer then
+						return nil
+					end
+				end
+
+				-- If the data is not exist, or the data is exist but the server is dead/stale, use the WAL entry, or the compressed blueprint
+				CurrentData = CurrentData or entry or deepclone(meta._CompressedBlueprint)
+
+				-- Checking WAL entry if exist and has a newer version than the current data
+				if entry and entry.__version and entry.__version > (CurrentData.__version or 0) then
+					-- Use the WAL entry if it's newer
+					CurrentData = entry
+				end
+
+				-- Rebinding the data with the new bounds, if some elements are already belongs to a player or something, it remains same
+				CurrentData.__bounds = {
+					id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerId,
+					serverid = ServerId,
+					since = CurrentData.__bounds and CurrentData.__bounds.since or now,
+					lastheartbeat = now,
+				}
+				return CurrentData
 			end)
 		end)
+	end)
 
-		if not walSuccess then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent unable to write WAL before actual Data, reason: " .. tostring(err))
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write WAL before actual Data.")
+	local xresult = success and result
 
-			return false, nil, "write_wal_failed"
-		end
+	-- Checking if the result is success and has a valid data, and WAL entry is existed
+	if xresult and entry then
+		-- Remove the WAL entry after successfully commiting the data
+		pcall(function()  
+			meta._CurrentWALDataStore:RemoveAsync(record.Key)
+		end)
+	end
 
-		local dataSuccess, _, _ = write_data(data, key, currentData)
-		local backupSuccess, _, _ = write_backup(backup, key, currentData)
-		
-		if dataSuccess and backupSuccess and walSuccess then
-			pcall(function()
-				wal:RemoveAsync(key)
-			end)
+	return result
+end
+
+local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
+	record.CurrentState = "Running"
+
+	local now = workspace:GetServerTimeNow()
+	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+
+	local dataCache = meta._DataCache[record.Key]
+	if not dataCache then 
+		record.CurrentState = "Ready"
+		throw(meta, record, "Data is not loaded yet to saving operation, please load the record first.")
+		return false 
+	end
+
+	local tempData = dataCache.__data
+
+	local compressed, flag
+	local found = false
+
+	local existed = meta._CompressionStack[record.Key]
+
+	if existed then
+		if not existed.Dirty and record._LastCompressedData and record._LastFlagData then
+			compressed, flag = record._LastCompressedData, record._LastFlagData
 		else
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent unable to write Data or/and Backup, WAL remained for backup, reason: " .. tostring(err))
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Error happened while trying to write Data or/and Backup, WAL remained for backup soon.")
+			local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
 
-			return false, nil, "write_data_orand_backup_failed"
-		end
-
-		return true, walSuccess, "write_wal_success"
-	end
-	
-	local function is_key_owner_online(key)
-		local data = meta._DataCache[key]
-		if typeof(data) ~= "table" then return false end
-		
-		if data.__bounds and data.__bounds.id then
-			return Players:GetPlayerByUserId(data.__bounds.id) ~= nil
-		end
-		
-		local isId = tonumber(key)
-		if isId then
-			return Players:GetPlayerByUserId(isId) ~= nil
-		end
-		
-		return true
-	end
-	
-	local function is_key_pending(key)
-		for i, pending in ipairs(meta._SavePendingQueue) do
-			if pending.Key == key then
-				return true
-			end
-		end
-		
-		return false
-	end
-
-	local function call_flush(key, data : DataStore, wal : DataStore, backup : DataStore)
-		local currentData = meta._DataCache[key]
-		if not currentData then 
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not loaded and cannot able to find the data record from cache.")
-			return false 
-		end
-
-		local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
-		if codeStatus == "wal_disabled" then
-			write_data(data, key, currentData)
-			write_backup(backup, key, currentData)
-		end
-		
-		for i, pending in ipairs(meta._SavePendingQueue) do
-			if pending.Key == key then
-				table.remove(meta._SavePendingQueue, i)
-				break
-			end
-		end
-
-		return true
-	end
-	
-	local function call_cache_cleanup(key, interval, data : DataStore, wal : DataStore, backup : DataStore)
-		if is_key_owner_online(key) then return false end
-		if is_key_pending(key) then return false end
-		if meta._LockSessions:IsLocked(key) then return false end
-
-		local now = workspace:GetServerTimeNow()
-		local lastTouch = math.max(meta._GetTimestamp[key] or 0, meta._SaveTimestamp[key] or 0)
-		if now - lastTouch < interval then return false end
-
-		call_flush(key, data, wal, backup)
-				
-		meta._DataCache[key] = nil
-		meta._AutosaveTimestamp[key] = nil
-		meta._GetTimestamp[key] = nil
-		meta._SaveTimestamp[key] = nil
-		
-		dispatch(key, "OnCacheCleaned", key)
-		
-		return true
-	end
-
-	local function call_autosave(key, data : DataStore, wal : DataStore, backup : DataStore)
-		local calledSince = workspace:GetServerTimeNow()
-
-		while meta.Enabled and meta._DataCache[key] and meta._AutosaveTimestamp[key] and not meta._ShutdownCalled do
-			local now = workspace:GetServerTimeNow()
-			local currentData = meta._DataCache[key]
-
-			if now - calledSince >= meta.AutoSaveInterval then
-				local status, _, codeStatus = write_wal_optionally(wal, data, backup, key, currentData)
-
-				if codeStatus == "wal_disabled" then
-					local _, _, _ = write_data(data, key, currentData)
-					local _, _, _ = write_backup(backup, key, currentData)
-				end
-								
-				calledSince = now
-			end
-
-			task.wait(1)
-		end
-	end
-
-	local function create_lock_timer(ownerId, timeout)
-		if not meta._LockTimers[ownerId] then
-			meta._LockTimers[ownerId] = coroutine.create(function()
-				local startedSince = workspace:GetServerTimeNow()
-
-				while meta.Enabled and meta._LockTimers[ownerId] and not meta._ShutdownCalled do
-					local tickedNow = workspace:GetServerTimeNow()
-					if tickedNow - startedSince >= timeout then
-						record:ReleaseLockSession(ownerId)						
-						break
-					end
-					
-					task.wait(1)
-				end
-
-				meta._LockTimers[ownerId] = nil
-			end)
-
-			coroutine.resume(meta._LockTimers[ownerId])
-		end
-	end
-	
-	local function listen_local_broadcast(broadcastName, realName, key, callbackFunc)
-		if meta._LocalBroadcastListeners[broadcastName] then return end
-		
-		local entry = { Key = key, Schedule = nil }
-		
-		local success, result = pcall(function()
-			return MessagingService:SubscribeAsync(broadcastName, function(message)
-				dispatch(key, "OnLocalBroadcastListenerCalled", realName)
-				callbackFunc(message.Data.Key, message.Data)
-			end)
-		end)
-		
-		if not success then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to listen local broadcast, reason: " .. tostring(result))	
-			return
-		end
-		
-		entry.Schedule = result
-		meta._LocalBroadcastListeners[broadcastName] = entry
-		dispatch(key, "OnLocalBroadcastListenerReady", realName)
-	end
-
-	local function run_save_queue()
-		if meta._IsRunning or meta._ShutdownCalled then return end
-		meta._IsRunning = true
-
-		task.spawn(function()
-			while meta.Enabled and not meta._ShutdownCalled do
-				local count = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
-				local processed = 0
-				local max = meta.MaxDataSavingPerTick
-
-				while #meta._SavePendingQueue > 0 and processed < max and count > 0 and not meta._ShutdownCalled do
-					local obj = table.remove(meta._SavePendingQueue, 1) -- First in first out
-
-					local currentData = meta._DataCache[obj.Key]
-					if currentData then
-						local function commit()
-							local latestData = meta._DataCache[obj.Key]
-							if not latestData then return end
-							
-							latestData.__version = (latestData.__version or 0) + 1
-							local status, _, message = write_wal_optionally(obj.WAL, obj.Data, obj.Backup, obj.Key, latestData)
-							
-							if message == "wal_disabled" then
-								local _, _, _ = write_data(obj.Data, obj.Key, latestData)
-								local _, _, _ = write_backup(obj.Backup, obj.Key, latestData)
-							end
-						end
-
-						if obj.IsSafe then
-							meta._LockSessions:Do(obj.Key, commit)
-						else
-							commit()
-						end
-					end
-
-					processed += 1
-					count -= 1
-				end
-
-				task.wait(1)
-			end
-		end)
-	end
-
-	local function enqueue_save(key, data, wal, backup, isSafe)
-		for _, pending in ipairs(meta._SavePendingQueue) do
-			if pending.Key == key then
+			if not ok then
+				record.CurrentState = "Ready"
+				throw(meta, record, "Failed to compress the data of record when trying to save. Reason: " .. tostring(newCompressed))
 				return false
 			end
+
+			compressed, flag = newCompressed, newFlag
+
+			record._LastCompressedData = compressed
+			record._LastFlagData = flag
+
+			existed.Tick = now
+			existed.Dirty = false
 		end
-
-		table.insert(meta._SavePendingQueue, {
-			Key = key,
-			Data = data,
-			WAL = wal,
-			Backup = backup,
-			IsSafe = isSafe
-		})
-
-		run_save_queue()
-		return true
-	end
-
-	local function is_data_valid(thisData, thisValue)
-		if not meta.ValidationEnabled then 
-			return true 
-		end
-		
-		local trackedValidations = meta._TrackedValidations and meta._TrackedValidations[record.Key]
-		if not trackedValidations then return true end
-		
-		local predicate = trackedValidations[thisData]
-		if not predicate then
-			return true
-		end
-		
-		return predicate(thisValue)
-	end
-
-	local function is_schema_valid(thisData, thisValue)
-		if not meta.ValidationEnabled then return true end
-
-		local trackedSchemas = meta._TrackedSchemas and meta._TrackedSchemas[record.Key]
-		if not trackedSchemas then return true end
-
-		local schema = trackedSchemas[thisData]
-		if not schema then return true end
-
-		return typeof(thisValue) == schema
-	end
-
-	local function clamp_value(thisData, thisValue)
-		if not meta.ValidationEnabled then return thisValue end
-
-		local trackedClamps = meta._TrackedClamps and meta._TrackedClamps[record.Key]
-		if not trackedClamps then return thisValue end
-
-		local clampMin = trackedClamps[thisData] and trackedClamps[thisData].Min
-		local clampMax = trackedClamps[thisData] and trackedClamps[thisData].Max
-		
-		if typeof(thisValue) ~= "number" then return thisValue end
-		
-		if clampMin ~= nil and clampMax == nil then return math.max(thisValue, clampMin) 
-		elseif clampMax ~= nil and clampMin == nil then return math.min(thisValue, clampMax) 
-		elseif clampMin ~= nil and clampMax ~= nil then return math.clamp(thisValue, clampMin, clampMax) end
-		
-		return thisValue
-	end
-	
-	local function check_validation(key, thisData, thisValue)
-		if not is_schema_valid(thisData, thisValue) then
-			return false, nil
-		end
-				
-		local value = clamp_value(thisData, thisValue)
-		
-		if not is_data_valid(thisData, value) then
-			return false, nil
-		end
-		
-		return true, value
-	end
-	
-	local function write_wal_immediately(key, wal, data)
-		local currentData = meta._DataCache[key]
-		if not currentData then return end
-		
-		if meta.WALEnabled then
-			local success, err = pcall(function()
-				wal:UpdateAsync(key, function(old)
-					return currentData
-				end)
-			end)
-			
-			if not success then
-				dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to save WAL immediately, meaning the last data record haven't happened.")
-			end
-					else
-			local success, err = pcall(function()
-				data:UpdateAsync(key, function(old)
-					return currentData
-				end)
-			end)
-			
-			if not success then
-				dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to save last data, meaning the last data record haven't happened.")
-			end
-		end
-	end
-	
-	local function broadcast_owner_claimer(key, plrId, now)
-		if not meta.MessagingEnabled then return end
-		
-		local topic = meta.MessagingNamespace .. meta.ServerClaimerSuffix
-		local message = {
-			PossessedKey = key,
-			PossessedUserId = plrId,
-			PossessedSince = now,
-			PossessiveServerId = game.JobId
-		}
-		
-		local success, err = pcall(function()
-			MessagingService:PublishAsync(topic, message)
-		end)
-		
-		if not success then
-			dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to claim ownership of key.")
-		end
-	end
-
-	local function create_exclusive_safety(key)
-		Players.PlayerRemoving:Connect(function(player)
-			local now = workspace:GetServerTimeNow()
-			for key, bound in pairs(meta._BoundRegistry) do
-				if bound.UserId == player.UserId then
-					if not meta._DataCache[key] or not meta._DataCache[key].__bounds then continue end
-					meta._DataCache[key].__bounds.since = now
-					
-					write_wal_immediately(key, meta._CurrentWALDataStore, meta._CurrentDataStore)
-					meta._BoundRegistry[key] = nil
-				end
-			end
-
-			for key, data in pairs(meta._DataCache) do
-				if typeof(data) == "table" and data.__bounds and data.__bounds.id == player.UserId then
-					meta._DataCache[key] = nil
-					
-					for i, pending in ipairs(meta._SavePendingQueue) do
-						if pending.Key == key then
-							table.remove(meta._SavePendingQueue, i)
-							break
-						end
-					end
-					
-					meta._GetTimestamp[key] = nil
-					meta._SaveTimestamp[key] = nil
-					meta._AutosaveTimestamp[key] = nil
-				end
-			end
-		end)
-
-		game:BindToClose(function()
-			meta._ShutdownCalled = true
-
-			local schedule = { pending = 0 }
-			for key, bound in pairs(meta._BoundRegistry) do				
-				schedule.pending += 1
-				task.spawn(bound.Coroutine, schedule)
-			end
-
-			local remainingTime = 0
-			while schedule.pending > 0 and remainingTime < 25 do
-				task.wait(1)
-				remainingTime += 1
-			end
-		end)
-	end
-	
-	local function unbind_exclusive_access(key)
-		if not meta.ExclusiveAccessEnabled then return end
-		if not meta._BoundRegistry[key] then return end
-
-		meta._BoundRegistry[key] = nil
-		dispatch(key, "OnDataUnbinding", meta._DataCache[key])
-	end
-	
-	local function claim_ownership()
-		if meta._ClaimerSyncCalled then return end
-		meta._ClaimerSyncCalled = true
-
-		if not meta.MessagingEnabled then return end
-
-		local topic = meta.MessagingNamespace .. meta.ServerClaimerSuffix
-		local success, err = pcall(function()
-			MessagingService:SubscribeAsync(topic, function(message)
-				local payload = message.Data
-				if payload.PossessiveServerId == game.JobId then return end
-
-				local key = payload.PossessedKey
-				local currentBound = meta._BoundRegistry[key]
-				if not currentBound then return end
-
-				if payload.PossessedSince >= currentBound.Since then
-					if meta._DataCache[key] then
-						call_flush(key, meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
-					end
-
-					unbind_exclusive_access(key)
-					dispatch(key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: A server has been claimed this key, but it's still bounding in this server. So that, UDataComponent decided to remove the died exclusive access.")
-				end
-			end)
-		end)
-		
-		if not success then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: Unable to create a claimer broadcast, reason: " .. tostring(err))
-		end
-	end
-	
-	local function run_exclusive_timer(data, wal, backup)
-		if meta._ExclusiveTimerCalled or meta._ShutdownCalled then return end
-		meta._ExclusiveTimerCalled = true
-
-		task.spawn(function()
-			while meta.Enabled and meta.ExclusiveAccessEnabled and not meta._ShutdownCalled do
-				local now = workspace:GetServerTimeNow()
-
-				for key, bound in pairs(meta._BoundRegistry) do
-					local since = bound.Since
-
-					local dayInSec = 24 * 60 * 60
-					local timeout = dayInSec * meta.ExclusiveAccessExpiration
-
-					if now - since > timeout then
-						if not meta._DataCache[key] then continue end
-						
-						meta._DataCache[key].__bounds = nil
-						call_flush(key, data, wal, backup)
-
-						unbind_exclusive_access(key)
-						dispatch(key, "OnDataBindExpired")
-					end
-				end
-
-				task.wait(1)
-			end
-		end)
-	end
-
-	local function bind_exclusive_access(key, ar, timeSinceBound, player : Player)
-		if not meta.ExclusiveAccessEnabled then 
-			return 
-		end
-		if not player then return end
-
-		if meta._BoundRegistry[key] then
-			return
-		end
-		
-		meta._BoundRegistry[key] = {
-			UserId = player.UserId,
-			Since = timeSinceBound,
-			Coroutine = function(schedule)		
-				local now = workspace:GetServerTimeNow()
-				if meta._DataCache[key] and meta._DataCache[key].__bounds then
-					meta._DataCache[key].__bounds.since = now -- update the timestamp of subscription
-				end
-				
-				write_wal_immediately(key, meta._CurrentWALDataStore, meta._CurrentDataStore)
-				
-				if schedule and schedule.pending ~= nil then
-					schedule.pending -= 1
-				end
-			end
-		}
-
-		if not meta._ExclusiveSafetyCalled then
-			meta._ExclusiveSafetyCalled = true
-			create_exclusive_safety(key)
-		end
-		
-		ar.Owner = player
-		dispatch(key, "OnDataBinding", meta._DataCache[key])
-		run_exclusive_timer(meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
-		
-		claim_ownership()
-		broadcast_owner_claimer(key, player.UserId, timeSinceBound)
-	end
-
-	function record:Get(LoadRecovery : boolean?, ExclusivePlayer: Player?)
-		dispatch(record.Key, "OnDataLoading")
-
-		local currentData = meta._CurrentDataStore
-		local currentBackupData = meta._CurrentBackupDataStore
-		local currentWALData = meta._CurrentWALDataStore
-
-		local _attempts = 0
-		local obtainedData = nil
-
-		if meta._DataCache[record.Key] then
-			obtainedData = meta._DataCache[record.Key]
-			
-			if obtainedData.__bounds then
-				local id = obtainedData.__bounds.id
-				local since = obtainedData.__bounds.since
-
-				local dayInSec = 60 * 60 * 24
-				local days = meta.ExclusiveAccessExpiration or 1
-
-				local timeout = dayInSec * days
-
-				if workspace:GetServerTimeNow() - since < timeout then
-					local plr = Players:GetPlayerByUserId(id)
-					bind_exclusive_access(record.Key, record, since, plr)
-				else
-					dispatch(record.Key, "OnDataBindExpired")
-				end
-			end
-			
-			local status, result = false, deepclone(obtainedData)
-			if ExclusivePlayer then
-				if ensure_exc_player(record.Key, ExclusivePlayer) then
-					status = true
-				else
-					dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Get() returns blueprint/template of data, because the data is bound to another player.")
-					status, result = false, get_blueprint()
-				end
-			end
-
-			local clone = deepclone(result)
-			dispatch(record.Key, "OnDataLoaded", clone)
-			return true, result
-		end
-
-		local now = workspace:GetServerTimeNow()
-		if meta._GetTimestamp[record.Key] and now - meta._GetTimestamp[record.Key] < meta.RequestTimestampCooldown then 
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Get() halted, waiting for cooldown.")
-			return false, nil 
-		end
-		meta._GetTimestamp[record.Key] = now
-
-		if LoadRecovery then
-			local recoverStatus, message = record:TryToRecover()
-
-			if recoverStatus then
-				dispatch(record.Key, "OnDataRecovery")
-			end
-		end
-
-		repeat
-			local suc, err = pcall(function()
-				obtainedData = currentData:GetAsync(Key)
-			end)
-
-			if not suc then
-				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Get error happened, reason: " .. tostring(err))
-				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: happened in Get's function, caused by failed to obtain data, trying to get data again...")		
-			end
-
-			_attempts += 1
-			task.wait(meta.DefaultDataLoadingYieldDuration or 3)
-		until _attempts >= meta.DefaultDataLoadingAttempts or obtainedData ~= nil
-
-		if obtainedData == nil then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot obtain the record of the data from this key, trying to get data from backup")
-			dispatch(record.Key, "OnDataError", "Error happened while trying to obtain data, trying to obtain data from backup...")
-
-			local status, backupData = call_backup(currentBackupData)
-			local dataResult = if status then backupData else get_blueprint()
-			
-			if not meta._DataCache[record.Key] then
-				meta._DataCache[record.Key] = dataResult
-			end
-
-			if dataResult.__bounds then
-				local id = dataResult.__bounds.id
-				local since = dataResult.__bounds.since
-
-				local dayInSec = 60 * 60 * 24
-				local days = meta.ExclusiveAccessExpiration or 1
-
-				local timeout = dayInSec * days
-
-				if workspace:GetServerTimeNow() - since < timeout then
-					local plr = Players:GetPlayerByUserId(id)
-					bind_exclusive_access(record.Key, record, since, plr)
-				else
-					dispatch(record.Key, "OnDataBindExpired")
-				end
-			end
-			local _, _, _ = write_data(currentData, record.Key, dataResult) -- this will rewrite the main datastore when backup un/obtained the data
-			
-			local result = dataResult
-			if ExclusivePlayer then
-				if ensure_exc_player(record.Key, ExclusivePlayer) then
-					status = true
-				else
-					dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Get() returns blueprint/template of data, because the data is bound to another player.")
-					status, result = false, get_blueprint()
-				end
-			end
-			
-			local clone = deepclone(result)
-			dispatch(record.Key, "OnDataLoaded", clone)
-			return status, result
-		end
-		
-		if not meta._DataCache[record.Key] then
-			meta._DataCache[record.Key] = obtainedData
-		end		
-		
-		if obtainedData.__bounds then
-			local id = obtainedData.__bounds.id
-			local since = obtainedData.__bounds.since
-
-			local dayInSec = 60 * 60 * 24
-			local days = meta.ExclusiveAccessExpiration or 1
-
-			local timeout = dayInSec * days
-
-			if workspace:GetServerTimeNow() - since < timeout then
-				local plr = Players:GetPlayerByUserId(id)
-				bind_exclusive_access(record.Key, record, since, plr)
-			else
-				dispatch(record.Key, "OnDataBindExpired")
-			end
-		end
-		
-		local clone = deepclone(obtainedData)
-		dispatch(record.Key, "OnDataLoaded", clone)
-
-		if not meta._AutosaveTimestamp[record.Key] then
-			meta._AutosaveTimestamp[record.Key] = coroutine.create(call_autosave)
-
-			coroutine.resume(meta._AutosaveTimestamp[record.Key], record.Key, currentData, currentWALData, currentBackupData)
-		end
-
-		if ExclusivePlayer and obtainedData then
-			if ensure_exc_player(record.Key, ExclusivePlayer) then
-				return true, obtainedData
-			else
-				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Get() returns blueprint/template of data, because the data is bound to another player.")
-				return false, get_blueprint()
-			end
-		end
-
-		return true, obtainedData
-	end
-
-	function record:Save(Data: any, SegmentIndex: number?)
-		local now = workspace:GetServerTimeNow()
-		if meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then 
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Save() halted, waiting for cooldown.")
+	else
+		local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, tempData)
+		if not ok then 
+			record.CurrentState = "Ready"
+			throw(meta, record, "Failed to compress the data of record when trying to save. Reason: " .. tostring(newCompressed))
 			return false 
 		end
-		meta._SaveTimestamp[record.Key] = now
 
-		dispatch(record.Key, "OnDataSaving")
+		compressed, flag = newCompressed, newFlag
 
-		if not meta._DataCache[record.Key] then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save data, because data is not loaded yet.")
-			return false
-		end
-
-		local wal = meta._CurrentWALDataStore
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
-
-		local rejected = {}
-
-		if SegmentIndex then
-			local success, value = check_validation(record.Key, SegmentIndex, Data)
-			
-			if success then
-				meta._DataCache[record.Key][SegmentIndex] = value
-			else
-				table.insert(rejected, SegmentIndex)
-			end
-		else
-			local accepted = deepclone(meta._DataCache[record.Key])
-			
-			for thisData, thisValue in pairs(Data) do
-				local success, value = check_validation(record.Key, thisData, thisValue)
-				
-				if success then
-					accepted[thisData] = value
-				else
-					table.insert(rejected, thisData)
-				end
-			end
-			
-			meta._DataCache[record.Key] = accepted
-		end
-
-		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
-		end
-
-		enqueue_save(record.Key, data, wal, backup, false)
-
-		return true
+		record._LastCompressedData = compressed
+		record._LastFlagData = flag
 	end
 
-	function record:Write(WritingFunction: (CurrentData: any) -> any)
-		local now = workspace:GetServerTimeNow()
-		if meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
-		meta._SaveTimestamp[record.Key] = now
-
-		dispatch(record.Key, "OnDataSaving")
-
-		if not meta._DataCache[record.Key] then
-			return false
-		end
-
-		local wal = meta._CurrentWALDataStore
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
-
-		local clone = deepclone(meta._DataCache[record.Key])
-		local resultFunction = WritingFunction(clone)
-
-		if type(resultFunction) ~= "table" then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Write function must returns the/a table of param.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Write function isn't returning the table of param.")
-
-			return false
-		end
-
-		local rejected = {}
-		local filteredObjs = {}
-
-		for thisData, thisValue in pairs(resultFunction) do
-			filteredObjs[thisData] = thisValue
-		end
-		
-		for thisData, thisValue in pairs(filteredObjs) do
-			local accepted, value = check_validation(record.Key, thisData, thisValue)
-			
-			if not accepted then table.insert(rejected, thisData) continue end
-			meta._DataCache[record.Key][thisData] = value
-		end
-
-		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
-		end
-		
-		enqueue_save(record.Key, data, wal, backup, false)
-		return true
-	end
-
-	function record:Flush()
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
-		local wal = meta._CurrentWALDataStore
-
-		return call_flush(record.Key, data, wal, backup)
-	end
-
-	function record:TryToRecover()
-		if not meta.WALEnabled then
-			return false, "wal_disabled"
-		end
-
-		local wal = meta._CurrentWALDataStore
-
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
-
-		local recoveredData = nil
-		local _walAttempts = 0
-		repeat
-			local status, err = pcall(function()
-				recoveredData = wal:GetAsync(record.Key)
-			end)
-
-			if not status then
-				warn("[" .. meta.ErrorReasonNamespace .. "]: Unexpected error happened when trying to recover data from WAL, with reason: " .. tostring(err))
-				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unexpected error happened, when trying to recover data that was dead from WAL.")
-			end
-
-			_walAttempts += 1
-			task.wait(meta.DefaultDataLoadingYieldDuration or 3)
-		until _walAttempts >= meta.DefaultDataLoadingAttempts or recoveredData ~= nil
-
-		if not recoveredData then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: There is no WAL history to recover the data.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: There is no WAL history to recover the data, meaning the data has been successfully written or no record tracked.")
-
-			return false, "failed_recover"
-		end
-
-		local status, _, message = write_wal_optionally(wal, data, backup, record.Key, recoveredData)
-
-		if not status then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: Failed to recover data from WAL, with reason: " .. tostring(message))
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed to recover data from WAL.")
-
-			return false, "failed_recover"
-		end
-
-		return true, "success"
-	end
-
-	function record:Detach()
-		if meta.StrictlyUnallowDetaching then
-			return false, "unallowed_detach"
-		end
-
-		local currentData = meta._DataCache[record.Key]
-		if not currentData then
-			return false, "not_cached"
-		end
-		local clone = deepclone(currentData)
-
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
-
-		if meta.ArchivationEnabled then
-			local archive = meta._CurrentArchivedDataStore
-			pcall(function()
-				archive:UpdateAsync(record.Key .. "_" .. workspace:GetServerTimeNow(), function()
-					return currentData
-				end)
-			end)
-
-			dispatch(record.Key, "OnDataArchived", clone)
-			record.IsArchived = true
-		end
-
-		pcall(function()
-			data:RemoveAsync(record.Key)
-		end)
-
-		if meta.BackupRemovedWhenDetached then
-			pcall(function()
-				backup:RemoveAsync(record.Key)
-			end)
-		end
-
-		meta._BoundRegistry[record.Key] = nil
-		meta._SaveTimestamp[record.Key] = nil
-		meta._GetTimestamp[record.Key] = nil
-		meta._DataCache[record.Key] = nil
-		meta._AutosaveTimestamp[record.Key] = nil
-		meta._TrackedClamps[record.Key] = nil
-		meta._TrackedSchemas[record.Key] = nil
-		meta._TrackedValidations[record.Key] = nil
-
-		for i, pending in ipairs(meta._SavePendingQueue) do
-			if pending.Key == record.Key then
-				table.remove(meta._SavePendingQueue, i)
-				break
-			end
-		end
-
-		dispatch(record.Key, "OnDataRemoved", clone)
-		return true, "success"
-	end
-
-	function record:ForceSave(AlongCooldown : boolean, Data: any, SegmentIndex: number?)
-		local now = workspace:GetServerTimeNow()
-		if AlongCooldown and meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
-		meta._SaveTimestamp[record.Key] = now
-
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
-		local wal = meta._CurrentWALDataStore
-
-		dispatch(record.Key, "OnDataSaving")		
-
-		if not meta._DataCache[record.Key] then
-			return false
-		end
-
-		local rejected = {}
-
-		if SegmentIndex then
-			local success, value = check_validation(record.Key, SegmentIndex, Data)
-
-			if success then
-				meta._DataCache[record.Key][SegmentIndex] = value
-			else
-				table.insert(rejected, SegmentIndex)
-			end
-		else
-			local accepted = deepclone(meta._DataCache[record.Key])
-
-			for thisData, thisValue in pairs(Data) do
-				local success, value = check_validation(record.Key, thisData, thisValue)
-
-				if success then
-					accepted[thisData] = value
-				else
-					table.insert(rejected, thisData)
-				end
-			end
-
-			meta._DataCache[record.Key] = accepted
-		end
-
-		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
-		end
-
-		local clone = deepclone(meta._DataCache[record.Key])
-		local status, _, message = write_wal_optionally(wal, data, backup, record.Key, meta._DataCache[record.Key])
-
-		if not status then
-			if message == "wal_disabled" then
-				write_data(data, record.Key, meta._DataCache[record.Key])
-				write_backup(backup, record.Key, meta._DataCache[record.Key])
-
-				return true
-			end
-
-			warn("[" .. meta.ErrorReasonNamespace .. "]: Failed to save data, with reason: " .. tostring(message))
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed to save data.")
-
-			return false
-		end
-
-		dispatch(record.Key, "OnDataSaved", clone)
-		return true
-	end
-
-	function record:ForceWrite(AlongCooldown : boolean, WritingFunction: (CurrentData: any) -> any)
-		local now = workspace:GetServerTimeNow()
-		if AlongCooldown and meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
-		meta._SaveTimestamp[record.Key] = now
-
-		dispatch(record.Key, "OnDataSaving")
-
-		if not meta._DataCache[record.Key] then
-			return false
-		end
-
-		local wal = meta._CurrentWALDataStore
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
-
-		local clone = deepclone(meta._DataCache[record.Key])
-		local resultFunction = WritingFunction(clone)
-
-		if type(resultFunction) ~= "table" then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Write function must returns the/a table of param.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Write function isn't returning the table of param.")
-
-			return false
-		end
-
-		local rejected = {}
-		local filteredObjs = {}
-		
-		for thisData, thisValue in pairs(resultFunction) do
-			filteredObjs[thisData] = thisValue
-		end
-		
-		for thisData, thisValue in pairs(filteredObjs) do
-			local accepted, value = check_validation(thisData, thisValue)
-			
-			if not accepted then table.insert(rejected, thisData) continue end
-			meta._DataCache[record.Key][thisData] = value
-		end
-
-		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
-		end
-		
-		local filteredData = meta._DataCache[record.Key]
-		local status, _, message = write_wal_optionally(wal, data, backup, record.Key, filteredData)
-
-		if not status then
-			if message == "wal_disabled" then
-				write_data(data, record.Key, filteredData)
-				write_backup(backup, record.Key, filteredData)
-
-				dispatch(record.Key, "OnDataSaved", clone)
-
-				return true
-			end
-
-			warn("[" .. meta.ErrorReasonNamespace .. "]: Failed to save data, with reason: " .. tostring(message))
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed to save data.")
-
-			return false
-		end
-
-		dispatch(record.Key, "OnDataSaved", clone)
-		return true
-	end
-
-	function record:SafeGet(LoadRecovery: boolean?, ExclusivePlayer: Player?, LoadAttempts: number?, YieldTime: number?)
-		dispatch(record.Key, "OnDataLoading")
-
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
-		local wal = meta._CurrentWALDataStore
-
-		local attempts = LoadAttempts or meta.DefaultDataLoadingAttempts or 5
-		local yieldTime = YieldTime or meta.DefaultDataLoadingYieldDuration or 3
-
-		local status = false
-		local obtainedData = nil
-
-		if meta._DataCache[record.Key] then
-			obtainedData = deepclone(meta._DataCache[record.Key])
-			
-			if obtainedData.__bounds then
-				local id = obtainedData.__bounds.id
-				local since = obtainedData.__bounds.since
-
-				local dayInSec = 60 * 60 * 24
-				local days = meta.ExclusiveAccessExpiration or 1
-
-				local timeout = dayInSec * days
-
-				if workspace:GetServerTimeNow() - since < timeout then
-					local plr = Players:GetPlayerByUserId(id)
-					bind_exclusive_access(record.Key, record, since, plr)
-				else
-					dispatch(record.Key, "OnDataBindExpired")
-				end
-			end
-
-			if ExclusivePlayer then
-				if ensure_exc_player(record.Key, ExclusivePlayer) then
-					status = true
-				else
-					status, obtainedData = false, get_blueprint()
-				end
-			else
-				status = true
-			end
-
-			dispatch(record.Key, "OnDataLoaded", obtainedData)
-			return status, obtainedData
-		end
-
-		local now = workspace:GetServerTimeNow()
-		if meta._GetTimestamp[record.Key] and now - meta._GetTimestamp[record.Key] < meta.RequestTimestampCooldown then return false, nil end
-		meta._GetTimestamp[record.Key] = now
-
-		meta._LockSessions:Do(record.Key, function()
-			local _attempts = 0
-
-			if LoadRecovery then
-				local recoverStatus, message = record:TryToRecover()
-
-				if recoverStatus then
-					dispatch(record.Key, "OnDataRecovery")
-				end
-			end
-
-			repeat
-				local success, result = pcall(function()
-					obtainedData = data:GetAsync(record.Key)
-				end)
-
-				if not success then
-					warn("[" .. meta.ErrorReasonNamespace .. "]: Failed to load data, with reason: " .. tostring(result))
-					dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Failed to load data.")
-				end
-
-				_attempts += 1
-				task.wait(yieldTime)
-			until _attempts >= attempts or obtainedData ~= nil
-
-			if obtainedData == nil then
-				warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot obtain the record of the data from this key, trying to get data from backup")
-				dispatch(record.Key, "OnDataError", "Error happened while trying to obtain data, trying to obtain data from backup...")
-
-				local preStatus, backupData = call_backup(backup)
-				local dataResult = if preStatus then backupData else get_blueprint()
-				
-				if not meta._DataCache[record.Key] then
-					meta._DataCache[record.Key] = dataResult
-				end
-
-				if dataResult.__bounds then
-					local id = dataResult.__bounds.id
-					local since = dataResult.__bounds.since
-
-					local dayInSec = 60 * 60 * 24
-					local days = meta.ExclusiveAccessExpiration or 1
-
-					local timeout = dayInSec * days
-
-					if workspace:GetServerTimeNow() - since < timeout then
-						local plr = Players:GetPlayerByUserId(id)
-						bind_exclusive_access(record.Key, record, since, plr)
-					else
-						dispatch(record.Key, "OnDataBindExpired")
+	dataCache.__version = (dataCache.__version or 0) + 1
+	dataCache.__flag = flag
+
+	local commitedData = deepclone(dataCache)
+	commitedData.__data = compressed
+
+	local success, result
+	meta._LockSessions:Do(record.Key, function()
+		success, result = pcall(function()
+			return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+					local id = CurrentData.__bounds.id
+					local serverid = CurrentData.__bounds.serverid
+					local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
+
+					local isDifferentOwner = thisOwnerId ~= id			
+					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+
+					local isCacheStale = now - (dataCache.__bounds and dataCache.__bounds.since or 0) > meta.StaleServerClaimingTime
+
+					local isServerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.serverid and dataCache.__bounds.serverid ~= serverid and not isCacheStale
+					local isOwnerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.id and dataCache.__bounds.id ~= id
+
+					-- If the data from cache is owned by a different player or a different server, return nil to force an invalid result
+					if isServerNotSameAsCache or isOwnerNotSameAsCache then
+						return nil
+					end
+
+					-- If the data is owned by a different player or a different server, return nil to force an invalid result
+					if isDifferentOwner or isDifferentServer then
+						return nil
 					end
 				end
-				local _, _, _ = write_data(data, record.Key, dataResult) -- this will rewrite the main datastore when backup un/obtained the data
 
-				status, obtainedData = preStatus, dataResult
-			else
-				status = true
-			end
-			
-			if not meta._DataCache[record.Key] then
-				meta._DataCache[record.Key] = obtainedData
-			end	
+				CurrentData = CurrentData or commitedData or deepclone(meta._CompressedBlueprint)
 
-			if obtainedData.__bounds then
-				local id = obtainedData.__bounds.id
-				local since = obtainedData.__bounds.since
-
-				local dayInSec = 60 * 60 * 24
-				local days = meta.ExclusiveAccessExpiration or 1
-
-				local timeout = dayInSec * days
-
-				if workspace:GetServerTimeNow() - since < timeout then
-					local plr = Players:GetPlayerByUserId(id)
-					bind_exclusive_access(record.Key, record, since, plr)
-				else
-					dispatch(record.Key, "OnDataBindExpired")
+				if commitedData.__version and commitedData.__version > (CurrentData and CurrentData.__version or 0) then
+					CurrentData = commitedData
 				end
-			end
 
-			if ExclusivePlayer and obtainedData then
-				if ensure_exc_player(record.Key, ExclusivePlayer) then
-					status = true
-				else
-					status, obtainedData = false, get_blueprint()
-				end
-			end
-		end)	
-		
-		if not meta._AutosaveTimestamp[record.Key] then
-			meta._AutosaveTimestamp[record.Key] = coroutine.create(call_autosave)
+				CurrentData.__bounds.lastheartbeat = now			
+				CurrentData.__bounds.since = now
+				return CurrentData
+			end)
+		end)
+	end)
 
-			coroutine.resume(meta._AutosaveTimestamp[record.Key], record.Key, data, wal, backup)
+	local result = success and result
+	if result then
+		local dirtySave = meta._DirtySave[record.Key]
+		if dirtySave then
+			meta._DirtySave[record.Key] = nil
 		end
 
-		local clone = deepclone(obtainedData)
-		dispatch(record.Key, "OnDataLoaded", clone)
+		dispatch(meta, record, "OnSaved")
+	end
+	record.CurrentState = "Ready"
 
-		return status, obtainedData
+	return result
+end
+
+local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord, now : number)
+	local currentData = meta._DataCache[record.Key]
+	if not currentData then
+		throw(meta, record, "Data is not loaded yet to be saved automatically.")
+		return false
 	end
 
-	function record:SafeSave(Data: any, SegmentIndex: number?)
-		local now = workspace:GetServerTimeNow()
-		if meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
-		meta._SaveTimestamp[record.Key] = now
+	local clonedRecord = deepclone(currentData)
+	clonedRecord.__version = (clonedRecord.__version or 0) + 1
 
-		dispatch(record.Key, "OnDataSaving")
+	local data = deepclone(clonedRecord.__data)
+	local thisOwnerId = record.Owner and record.Owner.UserId or 0
 
-		if not meta._DataCache[record.Key] then
-			return false
-		end
+	local compressed, flag
+	local found = false
 
-		local wal = meta._CurrentWALDataStore
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
+	local existed = meta._CompressionStack[record.Key]
 
-		local rejected = {}
-
-		if SegmentIndex then
-			local success, value = check_validation(record.Key, SegmentIndex, Data)
-
-			if success then
-				meta._DataCache[record.Key][SegmentIndex] = value
-			else
-				table.insert(rejected, SegmentIndex)
-			end
+	if existed then
+		if not existed.Dirty and record._LastCompressedData and record._LastFlagData then
+			compressed, flag = record._LastCompressedData, record._LastFlagData
 		else
-			local accepted = deepclone(meta._DataCache[record.Key])
+			local ok, newCompressed, newFlag = pcall(Compressor.TryToCompress, data, EMERGENCY_COMPRESSION_LEVEL, meta.CompressionThreshold)
 
-			for thisData, thisValue in pairs(Data) do
-				local success, value = check_validation(record.Key, thisData, thisValue)
-
-				if success then
-					accepted[thisData] = value
-				else
-					table.insert(rejected, thisData)
-				end
+			if not ok then 
+				throw(meta, record, "Failed to compress the data of record when trying to write the record in standby operation. Reason: " .. tostring(newCompressed))
+				return false 
 			end
 
-			meta._DataCache[record.Key] = accepted
+			compressed, flag = newCompressed, newFlag
+		end
+	else
+		local ok, newCompressed, newFlag = pcall(Compressor.TryToCompress, data, EMERGENCY_COMPRESSION_LEVEL, meta.CompressionThreshold)
+		if not ok then 
+			throw(meta, record, "Failed to compress the data of record when trying to write the record in standby operation. Reason: " .. tostring(newCompressed))
+			return false 
 		end
 
-		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
-		end
-
-		enqueue_save(record.Key, data, wal, backup, true)
-
-		return true
+		compressed, flag = newCompressed, newFlag
 	end
 
-	function record:SafeWrite(WritingFunction: (CurrentData: any) -> any)
-		local now = workspace:GetServerTimeNow()
-		if meta._SaveTimestamp[record.Key] and now - meta._SaveTimestamp[record.Key] < meta.RequestTimestampCooldown then return false end
-		meta._SaveTimestamp[record.Key] = now
+	local success, result
+	meta._LockSessions:Do(record.Key, function()
+		success, result = pcall(function()
+			return meta._CurrentWALDataStore:UpdateAsync(record.Key, function(CurrentData)
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+					local id = CurrentData.__bounds.id
+					local serverid = CurrentData.__bounds.serverid
+					local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
 
-		dispatch(record.Key, "OnDataSaving")
+					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
+					local isCacheStale = now - (clonedRecord.__bounds and clonedRecord.__bounds.lastheartbeat or 0) > meta.StaleServerClaimingTime
 
-		if not meta._DataCache[record.Key] then
-			return false
-		end
+					local isServerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.serverid and clonedRecord.__bounds.serverid ~= serverid and clonedRecord.__bounds.serverid ~= ServerId and not isCacheStale
+					local isOwnerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.id and clonedRecord.__bounds.id ~= id and clonedRecord.__bounds.id ~= thisOwnerId
 
-		local wal = meta._CurrentWALDataStore
-		local data = meta._CurrentDataStore
-		local backup = meta._CurrentBackupDataStore
+					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+					local isDifferentOwner = id and id ~= thisOwnerId
 
-		local clone = deepclone(meta._DataCache[record.Key])
-		local resultFunction = WritingFunction(clone)
+					if isServerNotSameAsCache or isOwnerNotSameAsCache then
+						return nil
+					end
 
-		if type(resultFunction) ~= "table" then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent's Write function must returns the/a table of param.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Write function isn't returning the table of param.")
+					if isDifferentServer or isDifferentOwner then
+						return nil
+					end
+				end
 
-			return false
-		end
+				CurrentData = CurrentData or clonedRecord
 
-		local filteredObjs = {}
-		local rejected = {}
+				if clonedRecord.__version and CurrentData and CurrentData.__version and clonedRecord.__version > (CurrentData.__version or 0) then
+					CurrentData = clonedRecord
+				end
 
-		for thisData, thisValue in pairs(resultFunction) do
-			filteredObjs[thisData] = thisValue
-		end
-		
-		for thisData, thisValue in pairs(filteredObjs) do
-			local success, value = check_validation(record.Key, thisData, thisValue)
-			
-			if not success then table.insert(rejected, thisData) continue end
-			meta._DataCache[record.Key][thisData] = value
-		end
+				CurrentData.__data = compressed
+				CurrentData.__flag = flag
 
-		if #rejected > 0 then
-			warn("[" .. meta.ErrorReasonNamespace .. "]: " .. " UDataComponent cannot save some of datas, because those are not valid.")
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Some of datas are invalid, some of rejected datas are: " .. table.concat(rejected, ", ") .. ".")
-		end
-		
-		enqueue_save(record.Key, data, wal, backup, true)
-
-		return true
-	end
-
-	function record:AcquireLockSession(OwnerIdentity: string?, Timeout: number?)
-		local now = workspace:GetServerTimeNow()
-		OwnerIdentity = tostring(OwnerIdentity or (HttpService:GenerateGUID(false) .. "-" .. tostring(now)))
-		Timeout = Timeout or 10
-
-		local isSuccess = meta._LockSessions:Acquire(OwnerIdentity)
-		if not isSuccess then
-			meta._LockSessions:Release(OwnerIdentity)
-			return false, nil
-		end
-
-		create_lock_timer(OwnerIdentity, Timeout)
-		return isSuccess, OwnerIdentity
-	end
-
-	function record:ReleaseLockSession(OwnerIdentity: string)
-		local timer = meta._LockTimers[OwnerIdentity]
-		if timer then
-			coroutine.close(timer)
-			meta._LockTimers[OwnerIdentity] = nil
-		end
-
-		meta._LockSessions:Release(OwnerIdentity)
-		return true
-	end
-
-	function record:IsSessionLocked(OwnerIdentity: string)
-		return meta._LockSessions:IsLocked(OwnerIdentity)
-	end
-
-	function record:BindExclusiveAccess(ExclusivePlayer: Player)
-		if not meta.ExclusiveAccessEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
-			return false
-		end
-		
-		if not meta._DataCache or not meta._DataCache[record.Key] then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Unable to get data, it seems you called the binding before the data is loaded. Make sure the BindExclusivePlayer called after data loading of player.")
-			return false
-		end
-
-		local id = ExclusivePlayer.UserId
-		local data = deepclone(meta._DataCache[record.Key])
-		local now = workspace:GetServerTimeNow()
-
-		if data.__bounds == nil then
-			record:SafeWrite(function(CurrentData)
-				CurrentData.__bounds = {}
-
-				CurrentData.__bounds.id = id
+				CurrentData.__bounds.serverid = nil
+				CurrentData.__bounds.lastheartbeat = nil
 				CurrentData.__bounds.since = now
 
 				return CurrentData
 			end)
-
-			if meta._BoundRegistry[record.Key] == nil then
-				bind_exclusive_access(record.Key, record, now, ExclusivePlayer)
-			end			
-
-			return true
-		end
-
-		dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is already bound to " .. data.__bounds.id .. "")
-		run_exclusive_timer(meta._CurrentDataStore, meta._CurrentWALDataStore, meta._CurrentBackupDataStore)
-		return false
-	end
-
-	function record:UnbindExclusiveAccess()
-		if not meta.ExclusiveAccessEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
-			return false
-		end
-
-		local data = deepclone(meta._DataCache[record.Key])
-
-		if data.__bounds == nil or meta._BoundRegistry[record.Key] == nil then 
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is not bound to any player.")
-			return false
-		end
-
-		record:SafeWrite(function(CurrentData)
-			CurrentData.__bounds = nil
-
-			return CurrentData
-		end)		
-
-		unbind_exclusive_access(record.Key)
-
-		return true
-	end
-	
-	function record:RefreshExclusiveAccess()
-		if not meta.ExclusiveAccessEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
-			return false
-		end
-				
-		local currentData = meta._DataCache[record.Key]
-		local now = workspace:GetServerTimeNow()
-		if not currentData then 
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Unable to renew the exclusive access subscription, it seems you called the renew function before the data loaded.")
-			return false 
-		end
-				
-		local data = deepclone(currentData)
-		if data.__bounds == nil or data.__bounds.id == nil then 
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Data is not bound to any player.")
-			return false 
-		end
-				
-		local plr = Players:GetPlayerByUserId(data.__bounds.id)
-		if not plr then 
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Unable to find player who belongs current data.")
-			return false 
-		end
-				
-		record:SafeWrite(function(CurrentData)
-			CurrentData.__bounds.since = now
-			
-			return CurrentData
 		end)
-		
-		bind_exclusive_access(record.Key, record, now, plr)
-		dispatch(record.Key, "OnDataBindRefreshed")
-		return true
+	end)
+
+	local xresult = success and result
+
+	if xresult and not meta._ShutdownCalled then
+		local isForcedSaveSuccess, saveResult = pcall(record.ForceSave, record, data)
+
+		local index = 0
+		for i, pending in ipairs(meta._SavePendingQueue) do
+			if pending.Meta and pending.Meta.Key == record.Key then
+				index = i
+				break
+			end
+		end
+
+		if index then
+			table.remove(meta._SavePendingQueue, index)
+		end
+
+		if isForcedSaveSuccess and saveResult then
+			pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
+			pcall(record.Sleep, record)
+		end
+
+		dispatch(meta, record, "OnSaved")
+		record.CurrentState = "Asleep"
 	end
 
-	function record:IsExclusiveAccessBound()
-		if not meta.ExclusiveAccessEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
-			return false
-		end
+	return xresult
+end
 
-		local data = deepclone(meta._DataCache[record.Key])
-
-		return data.__bounds ~= nil and meta._BoundRegistry[record.Key] ~= nil
+local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
+	if not meta.BackupEnabled then
+		throw(meta, record, "Backup is disabled")
+		return nil
 	end
 
-	function record:IsPlayerInExclusiveAccess(PlayerThatAssumedExclusive: Player)
-		if not meta.ExclusiveAccessEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: " .. "Exclusive access is disabled.")
-			return false
+	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	local now = workspace:GetServerTimeNow()
+
+	local success, result = pcall(function()
+		return meta._CurrentDataStore:ListVersionsAsync(record.Key, Enum.SortDirection.Descending)
+	end)
+
+	if success and result then
+		local lastData = result:GetCurrentPage()[1]
+		if lastData == nil then 
+			throw(meta, record, "There is no backup data obtained, it seems the data is lost after 30 days or something...")
+			return nil 
 		end
 
-		local data = deepclone(meta._DataCache[record.Key])
-		local id = PlayerThatAssumedExclusive.UserId
+		local ok, backupData = pcall(function()
+			return meta._CurrentDataStore:GetVersionAsync(record.Key, lastData.Version)
+		end)
 
-		return data.__bounds ~= nil and data.__bounds.id == id and meta._BoundRegistry[record.Key] ~= nil and meta._BoundRegistry[record.Key].UserId == id
-	end
+		if ok and backupData then
+			return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid then
+					local bounds = CurrentData.__bounds
+					local id = CurrentData.__bounds.id
+					local serverid = CurrentData.__bounds.serverid
+					local lastHeartbeat = CurrentData.__bounds.lastheartbeat or 0
 
-	function record:CreateValidation(ValidationFunction: (PredicateDummy: UDataComponentValidationDummy) -> any)
-		local dummyMethods = {}
-		local trackedValidations = meta._TrackedValidations[record.Key] or {}
-		local trackedSchemas = meta._TrackedSchemas[record.Key] or {}
-		local trackedClamps = meta._TrackedClamps[record.Key] or {}
+					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
 
-		meta._TrackedValidations[record.Key] = trackedValidations
-		meta._TrackedSchemas[record.Key] = trackedSchemas
-		meta._TrackedClamps[record.Key] = trackedClamps
+					local isDifferentOwner = thisOwnerId ~= id
+					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
 
-		-- Inserting a predication of data whereas the data can be written when the predicate fulfilled
-		function dummyMethods:InsertPredicate(ThisData : any, Predicate: (ThisValue: any) -> any)
-			trackedValidations[ThisData] = Predicate
-		end
+					if isDifferentOwner or isDifferentServer then
+						return nil
+					end
+				end
 
-		function dummyMethods:RemovePredicate(ThisData : any)
-			trackedValidations[ThisData] = nil
-		end
+				CurrentData = CurrentData or backupData or deepclone(meta._CompressedBlueprint)
 
-		function dummyMethods:InsertSchema(ThisData : any, Type: string)
-			trackedSchemas[ThisData] = Type
-		end
+				if backupData and backupData.__version and backupData.__version > (CurrentData and CurrentData.__version or 0) then
+					CurrentData = backupData
+				end
 
-		function dummyMethods:RemoveSchema(ThisData : any)
-			trackedSchemas[ThisData] = nil
-		end
-
-		function dummyMethods:InsertClamp(ThisData : any, Min: number?, Max: number?)
-			trackedClamps[ThisData] = {Min = Min, Max = Max}
-		end
-
-		function dummyMethods:RemoveClamp(ThisData : any)
-			trackedClamps[ThisData] = nil
-		end
-
-		ValidationFunction(dummyMethods)
-	end
-	
-	function record:Unarchive(Attempts: number?, YieldTime: number?)
-		if not meta.ArchivationEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Archiving is disabled.")
-			return false
-		end
-		
-		local att = Attempts or 10
-		local yield = YieldTime or 1
-		
-		local obtained = nil
-		local _attempts = 0
-		repeat
-			local success, err = pcall(function()
-				obtained = meta._CurrentArchivedDataStore:GetAsync(record.Key)
+				CurrentData.__bounds = {
+					id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerId,
+					serverid = ServerId,
+					since = CurrentData.__bounds and CurrentData.__bounds.since or now,
+					lastheartbeat = now,
+				}
+				return CurrentData
 			end)
-			
-			if not success then
-				dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to unarchive back the destroyed data, reason: " .. tostring(err))
-			end
-			
-			_attempts += 1
-			task.wait(yield or 3)
-		until _attempts >= att or obtained ~= nil
-		
-		if obtained ~= nil then
-			write_data(meta._CurrentDataStore, record.Key, obtained)
-			meta._DataCache[record.Key] = obtained
-			
-			dispatch(record.Key, "OnDataUnarchived", deepclone(obtained))
-			record.IsArchived = false
-			
-			return true
 		end
-		
-		return false
 	end
-	
-	function record:OnConnect() : UDataComponentCallbackFunctions
-		local callbackMethods = {}
-		local components = meta._UDataComponentDynamicCallbacks
-				
-		local function registerCallback(CallbackType: string, Callback: any)
-			local listener = components:Get(CallbackType) or {}
-			
-			listener[record.Key] = listener[record.Key] or {}
-			
-			local id = HttpService:GenerateGUID(false)
-			listener[record.Key][id] = Callback
-			
-			local connector = {}
-			local disconnected = false
-			
-			function connector:Disconnect()
-				if disconnected then return end
-				disconnected = true
-				
-				listener[record.Key][id] = nil
+
+	throw(meta, record, "Unable to get the backup of data")
+	return nil
+end
+
+local function run_load_queue(meta : __UDCInfo_Internal)
+	if meta._IsObtainingRunning or meta._ShutdownCalled then return end
+	meta._IsObtainingRunning = true
+
+	RunService.Heartbeat:Connect(function(_)
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
+
+		local obtain = meta._ObtainPendingQueue
+		local perTick = meta.MaxDataObtainingPerTick
+
+		while #obtain > 0 and meta._CurrentLoadWorkers < meta.MaxConcurrentLoadWorkers do
+			local first = table.remove(obtain, 1)
+
+			local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+			local obtainBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.GetAsync)
+
+			if budget < perTick or obtainBudget < 2 then
+				break -- No budget left, stops current load request until next frame
 			end
-			
-			function connector:DisconnectAfterCalled()
-				if disconnected then return end
-				
-				local original = Callback
-				listener[record.Key][id] = function(...)
-					local ok, err = pcall(original, ...)
-					connector:Disconnect()
-					
-					if not ok then
-						error("[" .. meta.ErrorReasonNamespace .. "]: " .. err, 0)
+
+			if first.Meta and first.Meta.Owner and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
+				throw(meta, first.Meta, "Owner of this record left the game")
+				task.spawn(first.Thread, false, nil) -- Player left, cancel the load request
+				continue
+			end
+
+			meta._CurrentLoadWorkers += 1 -- Workers in working
+			task.spawn(function()
+				local success, result = pcall(load_data, meta, first.Meta)
+
+				if not success then -- Probably happened when the data is failed to be loaded, fallback to the backup
+					success, result = pcall(fallback_backup, meta, first.Meta)
+				end
+
+				meta._CurrentLoadWorkers -= 1 -- Workers finised the work
+				task.spawn(first.Thread, success, result) -- Continue the thread, regardless of the result
+			end)
+		end
+	end)
+end
+
+local function run_save_queue(meta : __UDCInfo_Internal)
+	if meta._IsSaveRunning or meta._ShutdownCalled then return end
+	meta._IsSaveRunning = true
+
+	RunService.Heartbeat:Connect(function(_)
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
+
+		local save = meta._SavePendingQueue
+		local perTick = meta.MaxDataSavingPerTick
+
+		while #save > 0 and meta._CurrentSaveWorkers < meta.MaxConcurrentSaveWorkers do
+			local first = table.remove(save, 1)
+
+			local saveBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+
+			if saveBudget < perTick then
+				break -- No budget left, stops current save request until next frame
+			end
+
+			if first.Meta and first.Meta.Owner and first.Meta.Key and not meta._DataCache[first.Meta.Key] and Players:GetPlayerByUserId(first.Meta.Owner.UserId) == nil then
+				throw(meta, first.Meta, "Owner of this record left the game")
+				task.spawn(first.Thread, false) -- Data is already unloaded, cancel the save request
+				continue
+			end
+
+			meta._CurrentSaveWorkers += 1 -- Workers in working
+			task.spawn(function()
+				local success, err = pcall(save_data, meta, first.Meta)
+
+				meta._CurrentSaveWorkers -= 1 -- Workers finised the work
+				task.spawn(first.Thread, success) -- Continue the thread, regardless of the result
+			end)
+		end
+	end)
+end
+
+local function run_compression_timer(meta : __UDCInfo_Internal)
+	if meta._IsCompressionTimerRunning or meta._ShutdownCalled then return end
+	meta._IsCompressionTimerRunning = true
+
+	RunService.Heartbeat:Connect(function(_)
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
+
+		local now = workspace:GetServerTimeNow()
+		for key, timer in pairs(meta._CompressionStack) do
+			if timer.Record and timer.Tick and meta._DataCache[key] then
+				if timer.Dirty and now - timer.Tick > meta.CompressionQueueCooldown then
+					local success, compressed, flag = pcall(compare_and_compress, meta, meta._DataCache[key].__data)
+					if success then
+						timer.Record._LastCompressedData = compressed
+						timer.Record._LastFlagData = flag
+
+						timer.Dirty = false
+						timer.Tick = now
 					end
 				end
 			end
-			
-			function connector:IsConnected()
-				return listener[record.Key] and listener[record.Key][id]
-			end
-			
-			function connector:Wait()
-				local currentThread = coroutine.running()
-				
-				listener[record.Key][id] = function(...)
-					local args = table.pack(...)
-					
-					local success, err = pcall(Callback, table.unpack(args, 1, args.n))
-					task.spawn(currentThread, table.unpack(args, 1, args.n))
+		end
+	end)
+end
 
-					if not success then
-						error("[" .. meta.ErrorReasonNamespace .. "]: " .. err, 0)
-					end					
-				end
-				
-				return coroutine.yield()
-			end
-			
-			return connector
-		end
-		
-		-- Callback Methods
+local function set_standby_place(meta : __UDCInfo_Internal)
+	if meta._StandbyReady or meta._ShutdownCalled then return end
+	meta._StandbyReady = true
 
-		function callbackMethods:OnDataLoading(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataLoading", Callback)
-		end
-		
-		function callbackMethods:OnDataLoaded(Callback: (Key: string, CloneData: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataLoaded", Callback)
-		end
-	
-		function callbackMethods:OnDataSaving(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataSaving", Callback)
-		end
-		
-		function callbackMethods:OnDataSaved(Callback: (Key: string, CloneData: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataSaved", Callback)
-		end
-		
-		function callbackMethods:OnDataArchived(Callback: (Key: string, ArchivedData: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataArchived", Callback)
-		end
-		
-		function callbackMethods:OnDataUnarchived(Callback: (Key: string, UnarchivedData: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataUnarchived", Callback)
-		end
-		
-		function callbackMethods:OnDataRecovery(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataRecovery", Callback)
-		end
-		
-		function callbackMethods:OnDataCached(Callback: (Key: string, CloneData: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataCached", Callback)
-		end
-		
-		function callbackMethods:OnDataRemoved(Callback: (Key: string, RemovedData: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataRemoved", Callback)
-		end
-		
-		function callbackMethods:OnDataBinding(Callback: (Key: string, Data: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataBinding", Callback)
-		end
-		
-		function callbackMethods:OnDataUnbinding(Callback: (Key: string, Data: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataUnbinding", Callback)
-		end
-		
-		function callbackMethods:OnDataBindRefreshed(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataBindRefreshed", Callback)
-		end
-		
-		function callbackMethods:OnDataBindExpired(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataBindExpired", Callback)
-		end
-		
-		function callbackMethods:OnCacheCleaned(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnCacheCleaned", Callback)
-		end
-		
-		function callbackMethods:OnTransactionBegin(Callback: (Key: string, WithKey: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnTransactionBegin", Callback)
-		end
-		
-		function callbackMethods:OnTransactionFiltered(Callback: (Key: string, FilteredObject: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnTransactionFiltered", Callback)
-		end
-		
-		function callbackMethods:OnTransactionEnded(Callback: (Key: string, WithKey: string, Results: any) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnTransactionEnded", Callback)
-		end
-		
-		function callbackMethods:OnReleased(Callback: (Key: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnReleased", Callback)
-		end
-		
-		function callbackMethods:OnDataError(Callback: (Key: string, Reason: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnDataError", Callback)
-		end
-		
-		function callbackMethods:OnSendingBroadcast(Callback: (Key: string, BroadcastName: string, BroadcastData: UDataComponentBroadcast) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnSendingBroadcast", Callback)
-		end
-		
-		function callbackMethods:OnReceivingBroadcast(Callback: (Key: string, BroadcastName: string, BroadcastData: UDataComponentBroadcast) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnReceivingBroadcast", Callback)
-		end
-		
-		function callbackMethods:OnLocalBroadcastListenerReady(Callback: (Key: string, LocalBroadcastName: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnLocalBroadcastListenerReady", Callback)
-		end
-		
-		function callbackMethods:OnLocalBroadcastListenerCalled(Callback: (Key: string, LocalBroadcastName: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnLocalBroadcastListenerCalled", Callback)
-		end
-		
-		function callbackMethods:OnLocalBroadcastListenerClosed(Callback: (Key: string, LocalBroadcastName: string) -> ()) : UDataComponentCallbackConnection
-			return registerCallback("OnLocalBroadcastListenerClosed", Callback)
-		end
-		
-		return callbackMethods
-	end
-	
-	function record:SwapTransaction(OtherPlayerData : UDataComponentRecord, Transaction: (ThisCurrentData: UDataComponentEditor, OtherCurrentData: UDataComponentEditor) -> (), Timeout : number?)
-		Timeout = Timeout or 10
-		if not meta.SwappingEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Swapping is disabled")
-			return false
-		end
-		
+	Players.PlayerRemoving:Connect(function(Player)
+		local userId = Player.UserId
 		local now = workspace:GetServerTimeNow()
-		if (meta._SwapTimestamp[record.Key] and now - meta._SwapTimestamp[record.Key] < meta.SwappingCooldown) or (meta._SwapTimestamp[OtherPlayerData.Key] and now - meta._SwapTimestamp[OtherPlayerData.Key] < meta.SwappingCooldown) then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Swapping is on cooldown")
-			return false
-		end
-		
-		meta._SwapTimestamp[record.Key] = now
-		meta._SwapTimestamp[OtherPlayerData.Key] = now
-		
-		if OtherPlayerData.Key == record.Key then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Swapping with self is not allowed")
-			return false
-		end
-		
-		local myMethods = {}
-		local otherMethods = {}
-		local obtainedResults = { Other = {}, This = {} }
-		
-		local otherData = meta._DataCache[OtherPlayerData.Key]
-		local myData = meta._DataCache[record.Key]
-		
-		if not otherData or not myData then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .."]: Unable to do transaction with other player, because failed to get data. It seems you're not loaded the data yet.")
-			return false
-		end
-		
-		local terminated = false
-		function myMethods:Give(ThisData: any, Value: number)
-			local _value = myData[ThisData] or 0
-			if not _value or typeof(_value) ~= "number" then 
-				dispatch(record.Key, "OnTransactionFiltered", ThisData)
-				return 
+
+		if meta._ShutdownCalled then return end -- Preventing dead UDataComponent to do commands
+
+		for i, info in ipairs(meta._StandbyRegistry) do
+			local sameOwner = info.Record and info.Record.Owner and info.Record.Owner.UserId == userId
+
+			if sameOwner then
+				write_to_wal_or_fs(meta, info.Record, now)				
+				table.remove(meta._StandbyRegistry, i)
+				break
 			end
-			
-			Value = math.clamp(Value, 0, _value)
-			obtainedResults["Other"][ThisData] = Value
 		end
-		
-		function otherMethods:Give(ThisData: any, Value: number)
-			local _value = otherData[ThisData] or 0
-			if not _value or typeof(_value) ~= "number" then 
-				dispatch(OtherPlayerData.Key, "OnTransactionFiltered", ThisData)
-				return 
+	end)
+
+	game:BindToClose(function()
+		meta._ShutdownCalled = true
+
+		local dirty = {}
+		local normals = {}
+		for _, info in ipairs(meta._StandbyRegistry) do
+			if info and info.Record and info.Key and meta._DataCache[info.Key] then
+				if meta._DirtySave[info.Key] then
+					table.insert(dirty, info)
+					continue
+				end
+
+				table.insert(normals, info)
 			end
-			
-			Value = math.clamp(Value, 0, _value)
-			obtainedResults["This"][ThisData] = Value
 		end
-		
-		local isSuccess1, lock1 = OtherPlayerData:AcquireLockSession(OtherPlayerData.Key, Timeout)
-		local isSuccess2, lock2 = record:AcquireLockSession(record.Key, Timeout)
-		
-		if not isSuccess1 or not isSuccess2 then
-			if isSuccess1 then OtherPlayerData:ReleaseLockSession(lock1) end
-			if isSuccess2 then record:ReleaseLockSession(lock2) end
-			
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .."]: Unable to do transaction with other player, because failed lock.")
-			return false
+		meta._StandbyRegistry = {}
+
+		local working = { Workers = 0 }
+
+		local now = workspace:GetServerTimeNow()
+		local stopped = false
+
+		while (#dirty > 0 or #normals > 0) and not stopped do
+			if workspace:GetServerTimeNow() - now > meta.ShutdownSecondsToken then
+				stopped = true
+				break
+			end
+
+			while (#dirty > 0 or #normals > 0) and working.Workers < meta.MaxStandbyWorkers do
+				local updateBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+				if updateBudget < 1 then break end
+
+				local item = table.remove(dirty, 1)
+				if item then
+					working.Workers += 1
+					task.spawn(function()
+						pcall(write_to_wal_or_fs, meta, item.Record, now)
+						working.Workers -= 1
+					end)
+				end
+
+				local normal = table.remove(normals, 1)
+				if normal then
+					working.Workers += 1
+					task.spawn(function()
+						pcall(normal.Record.Sleep, normal.Record)
+						working.Workers -= 1
+					end)
+				end
+			end
+
+			task.wait()
 		end
-		
-		otherData = meta._DataCache[OtherPlayerData.Key]
-		myData = meta._DataCache[record.Key]
-		
-		if not otherData or not myData then
-			OtherPlayerData:ReleaseLockSession(lock1)
-			record:ReleaseLockSession(lock2)
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .."]: Unable to do transaction with other player, because failed to get data. It seems you're not loaded the data yet, or the snapshot gone.")
-			return false
+	end)
+end
+
+-- just to remember, autosave in UDC saving the dirty record that still in queue
+-- so, when your Save/Write request was still in queue and the record is dirty, but autosave interval hits, it will automatically saved seperatedly instead
+local function run_autosave(meta : __UDCInfo_Internal)
+	if meta._AutosaveCalled or meta._ShutdownCalled then return end
+	meta._AutosaveCalled = true
+
+	RunService.Heartbeat:Connect(function()
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end
+
+		local now = workspace:GetServerTimeNow()
+		local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+
+		while budget > 0 and meta._CurrentAutoSaveWorkers < meta.MaxConcurrentAutosaveWorkers and not meta._ShutdownCalled do
+			local dirty = {}
+			for key, info in pairs(meta._AutosaveTimestamp) do
+				if info and info.Record and info.Timestamp and now - info.Timestamp > meta.AutoSaveInterval and meta._DirtySave[key] and meta._DataCache[key] and not meta._ShutdownCalled then
+					table.insert(dirty, info.Record)					
+				end
+			end
+
+			if #dirty == 0 then break end
+
+			for _, record in ipairs(dirty) do
+				local currentBudget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync) -- refresh the budget
+				if currentBudget <= 0 then break end
+
+				local cache = meta._DataCache[record.Key]
+				if not cache then 
+					throw(meta, record, "Record is not loaded to get autosaved by UDC, please load the record first.")
+					continue 
+				end
+
+				local data = deepclone(cache.__data)
+
+				meta._CurrentAutoSaveWorkers += 1
+				task.spawn(function()	
+					pcall(record.ForceSave, record, data)
+
+					meta._CurrentAutoSaveWorkers -= 1
+					if meta._AutosaveTimestamp[record.Key] then
+						meta._AutosaveTimestamp[record.Key].Timestamp = workspace:GetServerTimeNow() -- Reset the timestamp to prevent multiple saves, and must be the newest timestamp after saving
+					end					
+
+					dispatch(meta, record, "OnAutoSaved")
+				end)
+			end
 		end
-		
-		dispatch(record.Key, "OnTransactionBegin", OtherPlayerData.Key)
-		dispatch(OtherPlayerData.Key, "OnTransactionBegin", record.Key)
-		
-		Transaction(myMethods, otherMethods)
-		
-		for key, value in pairs(obtainedResults.Other) do
-			otherData[key] = (otherData[key] or 0) + value
-			myData[key] = (myData[key] or 0) - value
+	end)
+end
+
+local function run_broadcast_queue(meta : __UDCInfo_Internal)
+	if meta._BroadcastQueueRunning or meta._ShutdownCalled then return end
+	meta._BroadcastQueueRunning = true
+
+	RunService.Heartbeat:Connect(function() 
+		while #meta._BroadcastPendingQueue > 0 and can_send_broadcast(meta) and meta.MessagingEnabled and not meta._ShutdownCalled do
+			local item = table.remove(meta._BroadcastPendingQueue, 1)
+			if not item then continue end
+
+			if item.Target then
+				item.Packet.__target = item.Target
+			end
+
+			local successCompressed, compressed, flag = pcall(compare_broadcast_payload, meta, item.Packet)
+			if not successCompressed then 
+				throw(meta, item.Record, "Unable to broadcast packet, reason: " .. tostring(compressed))
+				continue 
+			end
+
+			local deliver = {}
+			deliver.__data = compressed
+			deliver.__flag = flag
+
+			local success, err = pcall(function()
+				return MessagingService:PublishAsync(item.Channel, deliver)
+			end)
+
+			record_broadcast_sent(meta)
+
+			if success then
+				dispatch(meta, item.Record, "OnBroadcastSent")
+			else
+				throw(meta, item.Record, "Unable to broadcast packet, reason: " .. tostring(err))
+			end
 		end
-		
-		for key, value in pairs(obtainedResults.This) do
-			myData[key] = (myData[key] or 0) + value
-			otherData[key] = (otherData[key] or 0) - value
-		end
-		
-		OtherPlayerData:Flush()
-		record:Flush()
-		
-		OtherPlayerData:ReleaseLockSession(lock1)
-		record:ReleaseLockSession(lock2)
-		
-		dispatch(record.Key, "OnTransactionEnded", OtherPlayerData.Key, obtainedResults.This)
-		dispatch(OtherPlayerData.Key, "OnTransactionEnded", record.Key, obtainedResults.Other)
+	end)
+end
+
+local function enqueue_load(meta : __UDCInfo_Internal, record : UDCRecord)
+	run_load_queue(meta) -- First-time run the load queue if it's not running
+
+	local currentThread = coroutine.running()
+	table.insert(meta._ObtainPendingQueue, {
+		Meta = record,
+		Thread = currentThread,
+	})
+
+	return coroutine.yield() -- Yield until the data is loaded, and returns the status and loaded data
+end
+
+local function enqueue_save(meta : __UDCInfo_Internal, record : UDCRecord)
+	run_save_queue(meta) -- First-time run the save queue if it's not running
+
+	local currentThread = coroutine.running()
+	table.insert(meta._SavePendingQueue, {
+		Meta = record,
+		Thread = currentThread,
+	})
+
+	return coroutine.yield() -- Yield until the data is saved
+end
+
+local function push_compression_timer(meta : __UDCInfo_Internal, record : UDCRecord)
+	run_compression_timer(meta) -- First-time run the compression timer if it's not running
+
+	local now = workspace:GetServerTimeNow()
+
+	local existed = meta._CompressionStack[record.Key]
+	if existed then
+		existed.Dirty = true
+		return false
+	end
+
+	meta._CompressionStack[record.Key] = {
+		Record = record,
+		Tick = now,
+		Dirty = true
+	}
+
+	return true
+end
+
+local function add_standby_record(meta : __UDCInfo_Internal, record : UDCRecord)
+	set_standby_place(meta)
+
+	local find = find_standby_index(meta, record.Key)
+	if not find then
+		table.insert(meta._StandbyRegistry, { Record = record, Key = record.Key })
 		return true
 	end
 
-	function record:SmartCleanCache(Interval: number?)
-		if not meta.CacheCleaningEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Cache cleaning is disabled")
-			return
-		end
-		
-		if meta._CacheCleaningCalled then return end
-		meta._CacheCleaningCalled = true
-		
-		local data = meta._CurrentDataStore
-		local wal = meta._CurrentWALDataStore
-		local backup = meta._CurrentBackupDataStore
-		
-		local inv = Interval or meta.CacheCleaningInterval or 300
-		
-		meta._CacheCleaningThread = task.spawn(function()
-			while meta.Enabled do
-				local checkKeys = {}
-				for key in pairs(meta._DataCache) do
-					table.insert(checkKeys, key)
-				end
-				
-				for _, key in ipairs(checkKeys) do
-					if not meta._BoundRegistry[key] then
-						call_cache_cleanup(key, inv, data, wal, backup)
-					end
-				end
-				
-				task.wait(inv)
-			end
-		end)
-	end
-	
-	function record:EndCacheCleaning()
-		if not meta.CacheCleaningEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Cache cleaning is disabled")
-			return
-		end
-		
-		if not meta._CacheCleaningCalled then return end
-		meta._CacheCleaningCalled = false
-		
-		task.cancel(meta._CacheCleaningThread)
-		meta._CacheCleaningThread = nil
+	return false
+end
+
+local function push_to_autosave(meta : __UDCInfo_Internal, record : UDCRecord)
+	run_autosave(meta)
+
+	local now = workspace:GetServerTimeNow()
+	if not meta._AutosaveTimestamp[record.Key] then
+		meta._AutosaveTimestamp[record.Key] = { Record = record, Timestamp = now }
+		return true
 	end
 
-	function record:GetVersion()
-		return meta._DataCache[record.Key] and meta._DataCache[record.Key].__version or 0
+	return false
+end
+
+
+local function enqueue_broadcast(meta : __UDCInfo_Internal, record : UDCRecord, channel : string, packet : any, targetKey : string? | number?)
+	if not meta.MessagingEnabled then
+		return
 	end
-	
-	function record:BroadcastCurrentData(BroadcastName : string, DetailedThings : any?)
+
+	run_broadcast_queue(meta) -- First-time run the broadcast queue if it's not running
+
+	table.insert(meta._BroadcastPendingQueue, {
+		Channel = channel,
+		Packet = packet,
+		Record = record,
+		Target = targetKey,
+	})
+end
+
+local function is_key_pending_load(meta : __UDCInfo_Internal, key : string)
+	for _, pending in ipairs(meta._ObtainPendingQueue) do
+		if pending.Meta and pending.Meta.Key == key then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function is_key_pending_save(meta : __UDCInfo_Internal, key : string)
+	for _, pending in ipairs(meta._SavePendingQueue) do
+		if pending.Meta and pending.Meta.Key == key then
+			return true
+		end
+	end
+
+	return false
+end
+
+-- validator for data type checking
+local function are_schemas_valid(meta : __UDCInfo_Internal, record : UDCRecord, data : {any})
+	if not meta.ValidationEnabled then
+		return true -- if validation service is dead, just allow
+	end
+
+	local key = record.Key
+	local trackedSchemas = meta._TrackedSchemas[key]
+
+	if not trackedSchemas then
+		return true -- When the record isn't asked to be validated
+	end
+
+	for key, info in pairs(trackedSchemas) do
+		local schema = info.Schema
+		local penetration = info.Penetration
+
+		if not schema then
+			continue
+		end
+
+		if not penetration then
+			penetration = 1 -- default penetration
+		end
+
+		local element = find_element(data, key, penetration) -- finding elements through nested ways
+
+		if not element then
+			continue -- if there is no key in the data, it's probably just a "safety-net"
+		end
+
+		if typeof(element) ~= schema then
+			dispatch(meta, record, "OnDataFiltered", key)
+			return false -- are invalid when there is even one data hasn't same type as validators
+		end
+	end
+
+	return true -- are valid if all data's schemas suited
+end
+
+-- validator for data value clamping, automatic operations, void
+local function clamp_values(meta : __UDCInfo_Internal, record : UDCRecord, data : {any})
+	if not meta.ValidationEnabled then
+		return -- no clamping when validation service is dead
+	end
+
+	local key = record.Key
+	local trackedClamps = meta._TrackedClamps[key]
+
+	if not trackedClamps then
+		return -- When the record isn't asked to be clamped
+	end
+
+	for key, info in pairs(trackedClamps) do
+		local min, max = info.Min, info.Max
+		local penetration = info.Penetration
+
+		if not penetration then
+			penetration = 1 -- default penetration
+		end
+
+		local element = find_element(data, key, penetration)
+		if not element or typeof(element) ~= "number" then
+			continue -- if there is no element that want to be clamped OR it's not a number
+		end
+
+		local filtered
+		if min and not max then filtered = math.max(element, min)
+		elseif not min and max then filtered = math.min(element, max)
+		elseif min and max then filtered = math.clamp(element, min, max)
+		else 
+			filtered = element
+		end
+
+		local success = change_element(data, key, filtered, penetration)
+
+		if not success then
+			continue -- if there is no element that want to be clamped
+		end
+	end
+end
+
+-- validator for data value checking
+local function are_datas_valid(meta : __UDCInfo_Internal, record : UDCRecord, data : {any})
+	if not meta.ValidationEnabled then
+		return true -- if validation service is dead, just allow
+	end
+
+	local key = record.Key
+	local trackedValidations = meta._TrackedValidations[key]
+
+	if not trackedValidations then
+		return true -- When the record isn't asked to be validated
+	end
+
+	for key, info in pairs(trackedValidations) do
+		local predicate = info.Predicate
+		local penetration = info.Penetration
+
+		if not predicate then
+			continue -- just pass, if there's no these elements in validator
+		end
+
+		if not penetration then
+			penetration = 1 -- default penetration
+		end
+
+		local element = find_element(data, key, penetration)
+		if not element then
+			continue -- if there is no element that want to be validated
+		end
+
+		if not predicate(element) then
+			dispatch(meta, record, "OnDataFiltered", key)
+			return false -- if there is one data that is not valid or same as predicate, return false
+		end
+	end
+
+	return true -- are valid if all data's validations matched
+end
+
+local function create_validation_class(meta : __UDCInfo_Internal, record : UDCRecord): UDCValidation
+	local validations = {}
+
+	local trackedPredicates = meta._TrackedValidations and meta._TrackedValidations[record.Key] or {}
+	local trackedSchemas = meta._TrackedSchemas and meta._TrackedSchemas[record.Key] or {}
+	local trackedClamps = meta._TrackedClamps and meta._TrackedClamps and meta._TrackedClamps[record.Key] or {}
+
+	function validations:AddPredicate(ThisData: string | number, Predicate: (ThisValue: any) -> boolean, Penetration: number?)
+		Penetration = Penetration or 1 -- default penetration
+
+		trackedPredicates[ThisData] = {Predicate = Predicate, Penetration = Penetration}
+	end
+
+	function validations:RemovePredicate(ThisData: string | number, PenetrationIndex: number?)
+		PenetrationIndex = PenetrationIndex or 1 -- default penetration
+
+		trackedPredicates[ThisData] = nil
+	end
+
+	function validations:RemoveAllPredicates()
+		trackedPredicates = {}
+	end
+
+	function validations:AddSchema(ThisData: string | number, Schema: string, Penetration: number?)
+		Penetration = Penetration or 1 -- default penetration
+
+		trackedSchemas[ThisData] = {Schema = Schema, Penetration = Penetration}
+	end
+
+	function validations:RemoveSchema(ThisData: string | number, PenetrationIndex: number?)
+		PenetrationIndex = PenetrationIndex or 1 -- default penetration
+
+		trackedSchemas[ThisData] = nil
+	end
+
+	function validations:RemoveAllSchemas()
+		trackedSchemas = {}
+	end
+
+	function validations:AddClamp(ThisData: string | number, Min: number?, Max: number?, Penetration: number?)
+		Penetration = Penetration or 1 -- default penetration
+
+		trackedClamps[ThisData] = {Min = Min, Max = Max, Penetration = Penetration}
+	end
+
+	function validations:RemoveClamp(ThisData: string | number, PenetrationIndex: number?)
+		PenetrationIndex = PenetrationIndex or 1 -- default penetration
+
+		trackedClamps[ThisData] = nil
+	end
+
+	function validations:RemoveAllClamps()
+		trackedClamps = {}		
+	end
+
+	meta._TrackedValidations[record.Key] = trackedPredicates
+	meta._TrackedSchemas[record.Key] = trackedSchemas
+	meta._TrackedClamps[record.Key] = trackedClamps
+
+	return validations :: UDCValidation
+end
+
+local function create_event_class(meta : __UDCInfo_Internal, record : UDCRecord): UDCEvent
+	local events = {}
+	local listenerTypes = meta._UDataComponentDynamicCallbacks
+
+	local function registerCallback(CallbackType: string, Callback: any)
+		local listener = listenerTypes[CallbackType] or {}
+		listener[record.Key] = listener[record.Key] or {}
+
+		local id = HttpService:GenerateGUID(false)
+		listener[record.Key][id] = Callback
+
+		local connectors = {}
+		local disconnected = false
+
+		function connectors:Disconnect()
+			if disconnected then return end
+			disconnected = true
+
+			listener[record.Key][id] = nil
+		end
+
+		function connectors:DisconnectAfterCalled()
+			if disconnected then return end
+
+			local original = Callback
+			listener[record.Key][id] = function(...)
+				local ok, err = pcall(original, ...)
+				connectors:Disconnect()
+
+				if not ok then
+					error(err)
+				end
+			end
+		end
+
+		function connectors:IsConnected()
+			return listener[record.Key] and listener[record.Key][id]
+		end
+
+		function connectors:Wait()
+			if disconnected then return end
+
+			local currentThread = coroutine.running()
+			listener[record.Key][id] = function(...)
+				local args = table.pack(...)
+
+				local success, err = pcall(Callback, table.unpack(args, 1, args.n))
+				task.spawn(currentThread, table.unpack(args, 1, args.n))
+
+				if not success then
+					error(err)
+				end
+			end
+
+			return coroutine.yield()
+		end
+
+		return connectors :: UDCEventConnector
+	end
+
+	function events:OnReleased(Callback: (Key: string | number) -> any)
+		return registerCallback("OnReleased", Callback)
+	end
+
+	function events:OnReady(Callback: (Key: string | number) -> any)
+		return registerCallback("OnReady", Callback)
+	end
+
+	function events:OnSaved(Callback: (Key: string | number) -> any)
+		return registerCallback("OnSaved", Callback)
+	end
+
+	function events:OnLoaded(Callback: (Key: string | number) -> any)
+		return registerCallback("OnLoaded", Callback)
+	end
+
+	function events:OnStandby(Callback: (Key: string | number) -> any)
+		return registerCallback("OnStandby", Callback)
+	end
+
+	function events:OnAutoSaved(Callback: (Key: string | number) -> any)
+		return registerCallback("OnAutoSaved", Callback)
+	end
+
+	function events:OnArchived(Callback: (Key: string | number) -> any)
+		return registerCallback("OnArchived", Callback)
+	end
+
+	function events:OnUnarchived(Callback: (Key: string | number) -> any)
+		return registerCallback("OnUnarchived", Callback)
+	end
+
+	function events:OnWrite(Callback: (Key: string | number, OldData: any, NewData: any) -> any)
+		return registerCallback("OnWrite", Callback)
+	end
+
+	function events:OnBroadcastSent(Callback: (Key: string | number) -> any)
+		return registerCallback("OnBroadcastSent", Callback)
+	end
+
+	function events:OnBroadcastReceived(Callback: (Key: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any)
+		return registerCallback("OnBroadcastReceived", Callback)
+	end
+
+	function events:OnRecordBroadcastReceived(Callback: (Key: string | number, BroadcasterKey: string | number, BroadcastPacket: UDCBroadcastingPacket) -> any)
+		return registerCallback("OnRecordBroadcastReceived", Callback)
+	end
+
+	function events:OnError(Callback: (Key: string | number, Error: string) -> any)
+		return registerCallback("OnError", Callback)
+	end
+
+	function events:OnDataFiltered(Callback: (Key: string | number, FilteredData: any) -> any)
+		return registerCallback("OnDataFiltered", Callback)
+	end
+
+	function events:OnOwnershipExpired(Callback: (Key: string | number) -> any)
+		return registerCallback("OnOwnershipExpired", Callback)
+	end
+
+	return events :: UDCEvent
+end
+
+local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal, recordName : string, globalName : string)
+	if not meta.MessagingEnabled or meta._RecordBroadcastCalled then return end
+	meta._RecordBroadcastCalled = true
+
+	local recordBroadcastName = meta.MessagingNamespace .. "-" .. recordName
+	local globalBroadcastName = meta.MessagingNamespace .. "-" .. globalName
+
+	local recordBrSuccess, recordBrErr = pcall(function()
+		return MessagingService:SubscribeAsync(recordBroadcastName, function(message)
+			local rawData = message.Data
+			if not rawData then return end
+
+			local compressedData = rawData.__data
+			local flag = rawData.__flag
+			if not compressedData or not flag then return end
+
+			local success, data = pcall(Compressor.TryToDecompress, compressedData, flag)
+			if not success then return end
+
+			if data and data.BroadcasterServerId == ServerId then 
+				return 
+			end
+
+			local timestamp = data.BroadcastTime or 0
+			local key = data.BroadcasterKey or 0
+			local ownerId = data.BroadcasterOwnerId or 0
+
+			local target = data.__target
+			if target and target == key then return end
+
+			local record = meta._ActiveRecords[target]		
+			if not record then return end
+
+			if workspace:GetServerTimeNow() - timestamp > meta.MessagingExpiration then 
+				throw(meta, record, "Received broadcast packet is expired or invalid.")
+				return 
+			end
+
+			local broadcasterData = data.BroadcasterData
+			if not broadcasterData then 
+				throw(meta, record, "Anonymous record data is missing.")
+				return 
+			end		
+
+			local packet = deepfreeze({
+				BroadcasterKey = key,
+				BroadcasterData = broadcasterData,
+				BroadcasterServerId = data.BroadcasterServerId,
+				BroadcasterOwnerId = data.BroadcasterOwnerId,
+				BroadcastTime = timestamp,
+				OtherThings = data.OtherThings or {}
+			})
+			dispatch(meta, record, "OnRecordBroadcastReceived", key, packet)
+		end)
+	end)
+
+	if not recordBrSuccess then
+		warn("[UDataComponent-InternalErr]: " .. recordBrErr)
+		return
+	end
+
+	local globalBrSuccess, globalBrErr = pcall(function()
+		return MessagingService:SubscribeAsync(globalBroadcastName, function(message)
+			local rawData = message.Data
+			if not rawData then return end
+
+			local compressedData = rawData.__data
+			local flag = rawData.__flag
+			if not compressedData or not flag then return end
+
+			local success, data = pcall(Compressor.TryToDecompress, compressedData, flag)
+			if not success then return end
+
+			if data and data.BroadcasterServerId == ServerId then 
+				return 
+			end
+
+			local timestamp = data.BroadcastTime or 0
+			local key = data.BroadcasterKey or 0
+			local ownerId = data.BroadcasterOwnerId or 0
+
+			if workspace:GetServerTimeNow() - timestamp > meta.MessagingExpiration then return end
+
+			local broadcasterData = data.BroadcasterData
+			if not broadcasterData then return end
+
+			local packet = deepfreeze({
+				BroadcasterKey = key,
+				BroadcasterData = broadcasterData,
+				BroadcasterServerId = data.BroadcasterServerId,
+				BroadcasterOwnerId = data.BroadcasterOwnerId,
+				BroadcastTime = timestamp,
+				OtherThings = data.OtherThings or {}
+			})
+			for _, record in pairs(meta._ActiveRecords) do
+				dispatch(meta, record, "OnBroadcastReceived", packet)
+			end
+		end)
+	end)
+
+	if not globalBrSuccess then
+		warn("[UDataComponent-InternalErr]: " .. globalBrErr)
+	end
+end
+
+local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDCRecord, recordBroadcastSuffix: string, globalBroadcastSuffix: string)
+	local broadcasting = {}
+
+	-- in UDC's Broadcasting, there are three types of broadcasting:
+	-- 1. Global Broadcasting -- this is where current record broadcasting globally to all servers
+	-- 2. Record Broadcasting -- this is where current record broadcasting to specific record from other server
+	-- 3. Local Broadcasting -- this is where current record broadcasting to other servers that listening to the same channel
+
+	local recordBroadcastName = meta.MessagingNamespace .. "-" .. recordBroadcastSuffix
+	local globalBroadcastName = meta.MessagingNamespace .. "-" .. globalBroadcastSuffix
+
+	function broadcasting:BroadcastCurrentData(OtherThings: any?)
 		if not meta.MessagingEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Messaging is disabled")
+			throw(meta, record, "Messaging is disabled.")
 			return false
 		end
-		
+
 		local data = meta._DataCache[record.Key]
 		if not data then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not loaded")
+			throw(meta, record, "Data is not loaded.")
 			return false
 		end
-		
-		local bounds = data.__bounds
-		if not bounds then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not binded or it's expired")
-			return false
-		end
-		
-		data = deepclone(data)
-		local name = (meta.MessagingNamespace .. BroadcastName) or "UDataComponent"
-		
-		local messages = {
-			Key = record.Key,
-			Data = data,
-			BroadcasterPlaceId = game.JobId,
-			BroadcasterUserId = bounds.UserId,
-			BroadcastTime = workspace:GetServerTimeNow(),
-			Other = {}
+
+		local finishedData = deepclone(data.__data)
+
+		local timestamp = workspace:GetServerTimeNow()
+		local ownerId = record.Owner and record.Owner.UserId or 0
+		local key = record.Key
+
+		local packet = {
+			BroadcasterKey = key,
+			BroadcasterData = finishedData,
+			BroadcasterServerId = ServerId,
+			BroadcasterOwnerId = ownerId,
+			BroadcastTime = timestamp,
+			OtherThings = OtherThings or {}
 		}
-		
-		if DetailedThings then
-			table.insert(messages.Other, DetailedThings)
-		end
-		
-		local success, err = pcall(function()
-			MessagingService:PublishAsync(name, messages)
-		end)
-		
+
+		local success, err = pcall(enqueue_broadcast, meta, record, globalBroadcastName, packet)
+
 		if not success then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to broadcast other servers for current data, reason: " .. tostring(err))
+			throw(meta, record, "Unable to broadcast current data, reason: " .. tostring(err))
 			return false
 		end
-		
-		dispatch(record.Key, "OnSendingBroadcast", name, deepclone(messages))
+
 		return success
 	end
-	
-	function record:WaitForBroadcastPacket(BroadcastName : string, Timeout : number?) : UDataComponentBroadcast
-		local name = (meta.MessagingNamespace .. BroadcastName) or "UDataComponent"
-		local currentThread = coroutine.running()
-		Timeout = Timeout or 50
-		
-		local connection
-		local called = false
-		
-		local success, err = pcall(function()
-			connection = MessagingService:SubscribeAsync(name, function(message)
-				if called then return end
-				called = true
-				
-				connection:Disconnect()
-				task.spawn(currentThread, message.Data)
-			end)
-		end)
-		
-		if not success then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to subscribe for broadcast packets, reason: " .. tostring(err))
+
+	function broadcasting:WaitForBroadcastPacket(Timeout: number?) : UDCBroadcastingPacket
+		if not meta.MessagingEnabled then
+			throw(meta, record, "Messaging is disabled.")
 			return nil
 		end
-		
-		local timeoutThread = task.delay(Timeout, function()
+
+		Timeout = Timeout or 50
+		local currentThread = coroutine.running()
+
+		local connection
+		local called = false
+
+		local success, err = pcall(function()
+			connection = MessagingService:SubscribeAsync(globalBroadcastName, function(message)
+				if called then return end
+				called = true
+
+				local data = message.Data
+				if not data then return end
+
+				local flag = data.__flag
+				local compressedData = data.__data
+				if not compressedData or not flag then return end
+
+				local success, data = pcall(Compressor.TryToDecompress, compressedData, flag)
+				if not success then return end
+
+				if data.BroadcasterServerId == ServerId then return end
+				if workspace:GetServerTimeNow() - data.BroadcastTime > meta.MessagingExpiration then return end
+
+				local finishedData = deepclone(data)
+
+				task.spawn(currentThread, finishedData)
+				connection:Disconnect()
+			end)
+		end)
+
+		if not success then
+			throw(meta, record, "Error while waiting for broadcast packet: " .. err)
+			return nil
+		end
+
+		local timeoutSpawn = task.delay(Timeout, function()
 			if called then return end
 			called = true
-			
+
 			if connection then connection:Disconnect() end
 			task.spawn(currentThread, nil)
 		end)
-		
+
 		local result = coroutine.yield()
-		if timeoutThread then task.cancel(timeoutThread) end
-		
-		if result then
-			dispatch(record.Key, "OnReceivingBroadcast", name, result)
-			return result ::  UDataComponentBroadcast
-		end
-		
-		return nil
+		if timeoutSpawn then task.cancel(timeoutSpawn) end
+
+		return result :: UDCBroadcastingPacket
 	end
-	
-	function record:SendLocalBroadcast(BroadcastName : string, Password : string, DetailedThings : any?)
+
+	function broadcasting:SendLocalBroadcast(ChannelName: string, OtherThings: any?)
 		if not meta.MessagingEnabled then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Messaging is disabled")
+			throw(meta, record, "Messaging is disabled.")
 			return false
 		end
-		
+
 		local data = meta._DataCache[record.Key]
 		if not data then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not loaded")
+			throw(meta, record, "Data is not loaded.")
 			return false
 		end
-		
-		local bounds = data.__bounds
-		if not bounds then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Data is not binded or it's expired")
-			return false
-		end
-		
-		data = deepclone(data)
-		local name = (meta.MessagingNamespace .. BroadcastName) or "UDataComponent"
-		local encryptedName = encrypt(name, Password)
-		
-		local messages = {
-			Key = record.Key,
-			Data = data,
-			BroadcasterPlaceId = game.JobId,
-			BroadcasterUserId = bounds.UserId,
-			BroadcastTime = workspace:GetServerTimeNow(),
-			Other = {}
+
+		local completedName = meta.ErrorReasonNamespace .. "-" .. ChannelName
+		local finishedData = deepclone(data.__data)
+
+		local timestamp = workspace:GetServerTimeNow()
+		local ownerId = record.Owner and record.Owner.UserId or 0
+		local key = record.Key
+
+		local packet = {
+			BroadcasterKey = key,
+			BroadcasterData = finishedData,
+			BroadcasterServerId = ServerId,
+			BroadcasterOwnerId = ownerId,
+			BroadcastTime = timestamp,
+			OtherThings = OtherThings or {}
 		}
-		
-		if DetailedThings then
-			table.insert(messages.Other, DetailedThings)
-		end
-		
-		local success, err = pcall(function()
-			MessagingService:PublishAsync(encryptedName, messages)
-		end)
-		
+
+		local success, err = pcall(enqueue_broadcast, meta, record, completedName, packet)
+
 		if not success then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Unable to broadcast to the targeted server, reason: " .. tostring(err))
+			throw(meta, record, "Error while sending broadcast packet: " .. err)
 			return false
 		end
-		
-		dispatch(record.Key, "OnSendingBroadcast", name, deepclone(messages))
-		return true
-	end
-	
-	function record:ListenToLocalBroadcast(BroadcastName : string, Password : string, Callback: (Key: string, BroadcastData: UDataComponentBroadcast) -> ())
-		local name = (meta.MessagingNamespace .. BroadcastName) or "UDataComponent"
-		local encryptedName = encrypt(name, Password)
-		
-		listen_local_broadcast(encryptedName, BroadcastName, record.Key, Callback)
-	end
-	
-	function record:CloseLocalBroadcastListener(LocalBroadcastName : string, Password : string)
-		local name = (meta.MessagingNamespace .. LocalBroadcastName) or "UDataComponent"
-		local encryptedName = encrypt(name, Password)
-		
-		local listener = meta._LocalBroadcastListeners[encryptedName]
-		if not listener then
-			dispatch(record.Key, "OnDataError", "[" .. meta.ErrorReasonNamespace .. "]: Local Broadcast listener of " .. LocalBroadcastName .. " cannot be found.")
-			return false
-		end
-		
-		listener.Schedule:Disconnect()
-		
-		meta._LocalBroadcastListeners[encryptedName] = nil
-		return true
+
+		return success
 	end
 
-	return record
+	function broadcasting:ListenToLocalBroadcast(ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any)
+		if not meta.MessagingEnabled then
+			throw(meta, record, "Messaging is disabled.")
+			return nil
+		end
+
+		local completedName = meta.ErrorReasonNamespace .. "-" .. ChannelName
+		local connection
+
+		local disconnected = false
+		local methods = {}
+
+		function methods:Disconnect()
+			if disconnected then return end
+			disconnected = true
+
+			if connection then connection:Disconnect() end
+		end
+
+		local success, err = pcall(function()
+			connection = MessagingService:SubscribeAsync(completedName, function(message)
+				if disconnected then return end
+
+				local rawData = message.Data
+				if not rawData then return end
+
+				local compressedData = rawData.__data
+				local flag = rawData.__flag
+
+				local decompressedSuccess, data = pcall(Compressor.TryToDecompress, compressedData, flag)
+				if not decompressedSuccess then return end
+
+				if data.BroadcasterServerId == ServerId then return end
+				if workspace:GetServerTimeNow() - data.BroadcastTime > meta.MessagingExpiration then return end
+
+				local packet = deepfreeze({
+					BroadcasterKey = data.BroadcasterKey,
+					BroadcasterData = data,
+					BroadcasterServerId = data.BroadcasterServerId,
+					BroadcasterOwnerId = data.BroadcasterOwnerId,
+					BroadcastTime = data.BroadcastTime,
+					OtherThings = data.OtherThings or {},
+				})
+				task.spawn(Listener, packet)
+			end)
+		end)
+
+		if not success then
+			throw(meta, record, "Error while listening to broadcast: " .. err)
+			return nil
+		end
+
+		return methods
+	end
+
+	function broadcasting:SendBroadcastToRecord(TargetKey: string | number, OtherThings: any?)
+		if not meta.MessagingEnabled then
+			throw(meta, record, "Messaging is disabled.")
+			return false
+		end
+
+		local data = meta._DataCache[record.Key]
+		if not data then
+			throw(meta, record, "Data is not loaded.")
+			return false
+		end
+
+		local finishedData = deepclone(data.__data)
+
+		local timestamp = workspace:GetServerTimeNow()
+		local ownerId = record.Owner and record.Owner.UserId or 0
+		local key = record.Key
+
+		local packet = {
+			BroadcasterKey = key,
+			BroadcasterData = finishedData,
+			BroadcasterServerId = ServerId,
+			BroadcasterOwnerId = ownerId,
+			BroadcastTime = timestamp,
+			OtherThings = OtherThings or {}
+		}
+
+		local success, err = pcall(enqueue_broadcast, meta, record, recordBroadcastName, packet, TargetKey)
+
+		if not success then
+			throw(meta, record, "Error while sending broadcast packet: " .. err)
+			return false
+		end
+
+		return success
+	end
+
+	return broadcasting
 end
 
-function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Configurations : {any?}) : UDataComponentInfo
-	local _scope = Scope or "global"
+local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
+	if meta._ActiveRecords[key] then
+		return meta._ActiveRecords[key]
+	end
+
+	local recordBroadcastSuffix = "RecordBroadcast" -- broadcast suffix along with the namespace, where this is used for record broadcasting
+	local globalBroadcastSuffix = "GlobalBroadcast" -- broadcast suffix along with the namespace, where this is used for global broadcasting
+
+	local record = {}
+	record.Key = key -- This is the key of the record
+	record.Owner = owner -- This is the owner of the record
+	record.IsArchived = false -- This is to indicate if the record is archived or not
+	record.Event = create_event_class(meta, record) -- Utils of events for this record
+	record.Validation = create_validation_class(meta, record) -- Utils to create validation for this record
+	record.Swap = nil -- (COMING SOON!) Utils to swap data with other record
+	record.Broadcasting = create_broadcasting_class(meta, record, recordBroadcastSuffix, globalBroadcastSuffix) -- Utils to Broadcasting to other servers
+	record.Version = 0 -- This is the version of the data, it will be increased when the data is saved
+	record.Data = nil -- This is the data of the record
+	record.CurrentState = "Asleep"
+
+	record._AwakeProgress = false -- This is to indicate if the record's awake in progress
+	record._ReadyProgress = false -- This is to indicate if the record's ready in progress
+	record._SleepProgress = false -- This is to indicate if the record's sleep in progress
+	record._SaveProgress = false -- This is to indicate if the record's save in progress, where Save and Write shares this variable	
+	-- Because Write and Save are same, but have different roles in record commiting
+	record._ArchivingProgress = false -- This is to indicate if the record's archiving in progress
+	record._UnarchivingProgress = false -- This is to indicate if the record's unarchiving in progress
+	record._CurrentlyStandby = false -- This is to indicate if the record is currently in standby mode
+
+	record._LastCompressedData = nil -- This is to store the last compressed data
+	record._LastFlagData = nil -- This is to store the last flag data, of compression
+	record._CompressionDirtyFlag = false -- This is to indicate if the record's data is dirty, meaning it hasn't been compressed yet
+
+	-- State machines: Asleep -> WakingUp -> Ready -> Sleeping || Asleep
+	-- Difference of Asleep and Sleeping, Asleep is when the data is loaded first time, meanwhile Sleeping is when the data is released and saved, but can be called by Awake again
+
+	-- Clone of data template/blueprint	
+	local function get_blueprint()
+		return meta._CompressedBlueprint
+	end
+
+	-- Real flows usage:
+	-- Awake() -> Ready() -> Standby() -> Save() -> Sleep() -> Record died
+	-- In Standby(), it will automatically handle Save() and Sleep() when triggered, it could be player leaving or server shutdown
+
+	-- Use Standby() if want the data releasing and saving data automaticaly by UDC
+	-- Use Sleep() if you want to handle the data releasing and saving data manually
+	-- Actually, Sleep() is already used inside of Standby()
+
+	-- CAUTION: If you ever tried to access record.Data after releasing, like after Sleep() or Standby(). You will return nothing but nil, because the data already released and should be gone from this server session
+
+	-- Should be called first, this is where the player's data record is awake and loaded
+	-- In Awake, also checks if this server owns the data, it will check if current owner was this player
+	-- SUSPENDING (YIELDABLE), where Awake waits for dequeue session until the data is loaded
+	function record:Awake()
+		if meta._UnreadyData[record.Key] then
+			throw(meta, record, "Record is already awoken, it seems you're trying to awake the record twice. Just call Ready() instead to make the record ready to be used.")
+			return false
+		end
+
+		if meta._AwakeProgress then
+			throw(meta, record, "Record is in progress to awake...")
+			return false
+		end
+
+		if record.CurrentState ~= "Asleep" and record.CurrentState ~= "Sleeping" then
+			throw(meta, record, "Record is not in Asleep or Sleeping state, it seems you're trying to awake the record when it's already at different state.")
+			return false
+		end
+		meta._AwakeProgress = true
+
+		local success, result = enqueue_load(meta, record)
+		local overallResult = false
+
+		if success and result then
+			record.CurrentState = "WakingUp"
+			meta._UnreadyData[record.Key] = result
+
+			dispatch(meta, record, "OnLoaded")
+
+			overallResult = true
+		else 
+			record.CurrentState = "Sleeping"
+			meta._UnreadyData[record.Key] = nil
+
+			throw(meta, record, "Failed to awake the record.")
+
+			overallResult = false
+		end
+		meta._AwakeProgress = false
+
+		return overallResult
+	end
+
+	-- After the data record is awake, we need to make the data is actually ready to be used
+	-- I made the data compressed into buffer to reduce the size of data
+	-- Here we are, Ready() called to make a hard-checking and evaluating every security and data details
+	-- Then the data will be decompressed and record.Data can be accessed to get the read data
+	-- SUSPENDING (YIELDABLE), where Ready yields for checking every details until its done checking and applied to cache
+	function record:Ready(FindingPlayerTimeout: number?)
+		FindingPlayerTimeout = FindingPlayerTimeout or 10
+
+		local function penalty(msg)
+			record._ReadyProgress = false
+
+			record.CurrentState = "Sleeping"
+			meta._UnreadyData[record.Key] = nil
+
+			throw(meta, record, msg)
+		end
+
+		if not UDataComponent.IsAlive() then
+			throw(meta, record, "UDataComponent is not alive.")
+			return false
+		end
+
+		if meta._ShutdownCalled then
+			throw(meta, record, "The server is progress to shutdown.")
+			return false
+		end
+
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
+			return false
+		end
+
+		-- Whether the data is already waking up or not, if not, maybe cannot ready or already running
+		if record.CurrentState ~= "WakingUp" then
+			throw(meta, record, "Record is current in Ready state, meaning the record has been loaded. You can't call Ready() twice or more.")
+			return false
+		end
+
+		if record._ReadyProgress then
+			throw(meta, record, "Record is already in progress to ready...")
+			return false
+		end
+
+		record._ReadyProgress = true
+
+		if meta._DataCache[record.Key] ~= nil then
+			throw(meta, record, "Record is already ready.")
+			record.CurrentState = "Sleeping"
+			return false
+		end
+
+		local now = workspace:GetServerTimeNow()
+		local unready = meta._UnreadyData[record.Key]
+
+		-- Checking if the raw/unready data already loaded
+		if not unready then
+			record._ReadyProgress = false
+			record.CurrentState = "Sleeping"
+			throw(meta, record, "Record is not waking up yet, make sure this record has called Awake() before preparing to get ready.")
+			return false
+		end		
+
+		if meta._ActiveRecords[record.Key] then
+			penalty("Record is already active and ready.")
+			return false
+		end
+
+		-- Checking if the was archived or not
+		if record.IsArchived then
+			penalty("Record is being archived in this session.")
+			return false
+		end
+
+		-- Checking if essential elements of data are existing
+		if not unready.__version or not unready.__bounds or not unready.__data or not unready.__flag then
+			penalty("Missing record's elements, internal error.")
+			return false
+		end
+
+		-- Checking if bound elements in the data are existed
+		if not unready.__bounds or not unready.__bounds.id or not unready.__bounds.since or not unready.__bounds.serverid then
+			penalty("Missing bounds, internal error.")
+			return false
+		end
+
+		-- Checking if the data is owned by this server
+		if unready.__bounds.serverid ~= ServerId then
+			penalty("This record is not being owned by this server, unable to get ready.")
+			return false
+		end
+
+		-- Checking if the data is owned by this player
+		if record.Owner and record.Owner.UserId ~= unready.__bounds.id then
+			penalty("This record is not belong to current owner, unable to get ready.")
+			return false
+		end
+
+		-- Checking if the data is still bound to this player
+		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
+		if now - unready.__bounds.since > timeout then
+			penalty("Record binding is already expired for this owner, you should refresh the ownership expiration of this record.")
+			dispatch(meta, record, "OnOwnershipExpired")
+			return false
+		end
+
+		-- Checking if player is still in the server
+		local playerFound = false
+		while record.Owner and not playerFound do
+			-- If the player is still in the server, then it's ready
+			if Players:GetPlayerByUserId(record.Owner.UserId) ~= nil then
+				playerFound = true
+				-- If timeout is set, then it's not ready yet
+			elseif workspace:GetServerTimeNow() - now > FindingPlayerTimeout then
+				penalty("This record is not ready, the player is not found from this server.")
+				return false
+			else
+				task.wait(1)
+			end
+		end
+
+		local compressedData = unready.__data
+		local flagData = unready.__flag -- 'C' means compressed, 'R' means raw/real
+
+		local success, data = pcall(function()
+			return Compressor.TryToDecompress(compressedData, flagData)
+		end)
+
+		-- Checking if the data is successfully decompressed
+		if not success then
+			warn(data)
+			penalty("This record is not ready, the data is corrupted.")
+			return false
+		end
+
+		-- Checking if the data is a table
+		if typeof(data) ~= "table" then
+			penalty("The data is not a table.")
+			return false
+		end
+
+		-- Checking if the data size is not too big
+		if Compressor.GetSize(data) > meta.MaxDecompressedSize then
+			penalty("Data's size of this record is full.")
+			return false
+		end
+
+		-- Reconcilate the data with the blueprint, to prevent data corruption or data loss
+		reconcile(data, meta.DataBlueprint)
+
+		-- Checking if all datas are valid, even one invalid will case unready condition for strict checking
+		if not are_schemas_valid(meta, record, data) then
+			penalty("The data is not valid after validation. Because a data is not having valid data-type.")
+			return false
+		end
+
+		-- Clamping all values with the validations, if the element was a number type
+		clamp_values(meta, record, data)
+
+		-- Checking if datas are actually same as their own predicates
+		if not are_datas_valid(meta, record, data) then
+			penalty("The data is not valid after validation. Because a data is not valid to operate in a predicate.")
+			return false
+		end
+
+		-- Apply the data to the cache
+		record.Data = deepfreeze(data) -- Data is now ready to be used, as read-only table
+		record.CurrentState = "Ready" -- Current state is ready to do things
+		record.Version = meta._UnreadyData[record.Key].__version or 0 -- Set the version of this record to real data version
+
+		meta._UnreadyData[record.Key] = nil -- Remove the unready data, because the data is ready
+
+		meta._DataCache[record.Key] = unready -- Catch the record after filter
+		meta._DataCache[record.Key].__data = data  -- Cache the real data after compression
+
+		meta._ActiveRecords[record.Key] = record -- Add the record to active records, so developer can access the record
+
+		push_to_autosave(meta, record)
+		set_broadcast_record_subscriber(meta, recordBroadcastSuffix, globalBroadcastSuffix) -- first time Ready initialized, broadcast subscriber will be set
+
+		record._ReadyProgress = false
+
+		dispatch(meta, record, "OnReady")
+
+		return true
+	end
+
+	function record:Standby()
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is disabled.")
+			return false
+		end
+
+		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is not ready to standby.")
+			return false
+		end
+
+		if record._CurrentlyStandby then
+			throw(meta, record, "This record is already in standby.")
+			return false
+		end
+
+		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._SaveProgress then
+			throw(meta, record, "This record is in save progress, unable to override current record's state process.")
+			return false
+		end
+
+		if meta._DataCache[record.Key] == nil then
+			throw(meta, record, "It seems the record hadn't been loaded yet, unable to standby.")
+			return false
+		end
+
+		local success = add_standby_record(meta, record)
+
+		if success then
+			dispatch(meta, record, "OnStandby")
+		end
+
+		return success
+	end
+
+	-- Releasing the data from session, where this means this record has been fell asleep and cannot use the data anymore, unless you call Awake() to wake it up again
+	function record:Sleep()
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
+			return false
+		end
+
+		while record.CurrentState == "Running" do
+			task.wait()
+		end
+
+		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._SaveProgress then
+			throw(meta, record, "This record is in save progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
+			return false
+		end
+
+		record._SleepProgress = true
+
+		if record.CurrentState ~= "Ready" then
+			record._SleepProgress = false
+			throw(meta, record, "This record is currently not ready, unable to get sleep once.")
+			return false
+		end
+
+		local now = workspace:GetServerTimeNow()
+		local dataCache = meta._DataCache[record.Key]
+		if not dataCache or not dataCache.__bounds then
+			record._SleepProgress = false
+			throw(meta, record, "It seems this record hadn't been loaded yet, please load to sleep.")
+			return false
+		end
+
+		-- Checking if the data is still pending to save
+		while is_key_pending_save(meta, record.Key) do
+			task.wait()
+		end
+
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0		
+		local success, result = pcall(function()
+			return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+				if CurrentData and CurrentData.__bounds and CurrentData.__bounds.serverid and CurrentData.__bounds.lastheartbeat and CurrentData.__bounds.id then
+					local isSameServer = CurrentData.__bounds.serverid == ServerId
+					local isSameOwner = CurrentData.__bounds.id == thisOwnerId
+
+					if isSameServer and isSameOwner then
+						CurrentData.__bounds.serverid = nil
+						CurrentData.__bounds.lastheartbeat = nil
+						CurrentData.__bounds.since = now
+					end
+
+					return CurrentData
+				end
+
+				return nil
+			end)
+		end)
+
+		record._SleepProgress = false
+		if success and result then
+			meta._ActiveRecords[record.Key] = nil
+			meta._DataCache[record.Key] = nil
+			meta._WriteTimestamp[record.Key] = nil
+			meta._SwapTimestamp[record.Key] = nil
+			meta._AutosaveTimestamp[record.Key] = nil
+			meta._CompressionStack[record.Key] = nil
+			meta._LocalBroadcastListeners[record.Key] = nil
+			meta._DirtySave[record.Key] = nil
+
+			meta._TrackedClamps[record.Key] = nil
+			meta._TrackedSchemas[record.Key] = nil
+			meta._TrackedValidations[record.Key] = nil
+
+			record.Data = nil
+			record.Owner = nil
+			record.Version = 0
+			record.CurrentState = "Asleep"	
+
+			local find = find_standby_index(meta, record.Key)
+			if find then
+				table.remove(meta._StandbyRegistry, find)
+			end
+
+			dispatch(meta, record, "OnReleased")
+			return true
+		end
+
+		throw(meta, record, "Failed to release the record.")
+		return false
+	end
+
+	-- Trying to steal or enter into this record by another owner
+	-- Password makes sure that the stealer owner is actually trying to have current record from the current owner
+	-- IMPORANT: This function will not work if the record is not ready, also this function would cause you a DEAD SESSION if not released with Sleep() or automatic trigger by Standby() after use the record
+	-- Original owner will lost its record if the record have been successfully entered/stolen by another owner
+	function record:COMINGSOON_Enter(Password: string) -- COMING SOON
+
+	end
+
+	function record:COMINGSOON_GenerateLogin(ThisRecordPassword: string) -- COMING SOON
+
+	end
+
+	function record:COMINGSOON_DestroyLogin(Password: string) -- COMING SOON
+
+	end
+
+	-- Saving the custom data or edited-whole data into record, as waiting for its queue turn
+	-- Use SegmentIndex if you ever want to make cheaper data to save
+	-----------------------------------------------------------------------------------
+	-- Just remember, Save() didn't check the validations of the data before commit
+	-- We know that with Ready(), everything will be validated before the record state checked to ready, and you can't trigger fast-compression to compress the data when modifying the data
+	-- But, don't you think that you can make a "safety-first" with Write() that validates the data before commited to the data store?
+	-- Because, when you tried to load and ready, but some datas are not valid, you can't obtain it
+	-- So, I would recommend you to use Write() when your data wants more secure, particularly to validates the data first before commit
+	-- Use Save() for manual control, but beware of what you did
+	function record:Save(Data: any, SegmentIndex: number?)
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled")
+			return false
+		end
+
+		while record._SaveProgress do
+			task.wait()
+		end
+		record._SaveProgress = true
+
+		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
+			record._SaveProgress = false
+			return false
+		end
+
+		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
+			record._SaveProgress = false
+			return false
+		end
+
+		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do Save() operations. Please call Ready()")
+			record._SaveProgress = false
+			return false
+		end
+
+		local data = meta._DataCache[record.Key]
+		if not data or not data.__data then
+			throw(meta, record, "The data of this record is not loaded.")
+			record._SaveProgress = false
+			return false
+		end
+
+		if Data == nil then
+			throw(meta, record, "Data parameter in Save() is nil")
+			record._SaveProgress = false
+			return false
+		end
+
+		local oldData = deepclone(data.__data)
+		local newData
+
+		meta._LockSessions:Do(record.Key, function()
+			if SegmentIndex then
+				data.__data[SegmentIndex] = Data
+			else
+				data.__data = Data
+			end		
+
+			newData = deepclone(data.__data)			
+			record.Data = deepfreeze(data.__data)
+			meta._DirtySave[record.Key] = true
+		end)
+		push_compression_timer(meta, record)
+
+		local success = enqueue_save(meta, record)
+
+		record._SaveProgress = false
+		if success then
+			dispatch(meta, record, "OnWrite", oldData, newData)
+			return true
+		end
+
+		throw(meta, record, "Failed to push data to save in this record.")
+		return false
+	end
+
+	-- Easy, safe way to modificate the data of this record
+	-- Where Write() allows you to modificate the data safely with validation checking and compression operations
+	function record:Write(WritingFunction: (CurrentData: any) -> ())
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled")
+			return false
+		end
+
+		local now = workspace:GetServerTimeNow()
+		if meta._WriteTimestamp[record.Key] and now - meta._WriteTimestamp[record.Key] < meta.DataWritingCooldown then
+			-- dont give warning in this session
+			-- this is just a safety step
+			return false
+		end
+		meta._WriteTimestamp[record.Key] = now
+
+		while record._SaveProgress do
+			task.wait()
+		end
+		record._SaveProgress = true
+
+		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
+			record._SaveProgress = false
+			return false
+		end
+
+		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
+			record._SaveProgress = false
+			return false
+		end
+
+		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do Write() operations. Please call Ready()")
+			record._SaveProgress = false
+			return false
+		end
+
+		local data = meta._DataCache[record.Key]
+		if not data or not data.__data then
+			throw(meta, record, "Data of this record is not loaded yet.")
+			record._SaveProgress = false
+			return false
+		end
+
+		local success 
+		local customData = deepclone(data.__data) -- use deep-cloned table, so that the main data can't be changed, to prevent some "malicious" or "accident" data modifications
+		meta._LockSessions:Do(record.Key, function()
+			success = pcall(WritingFunction, customData) -- this function returns nothing, but change the data safely
+
+			if not success then
+				return
+			end
+
+			-- schema validations, when data types are valid
+			if not are_schemas_valid(meta, record, customData) then
+				success = false
+				return
+			end
+
+			-- clamp values that is a number
+			clamp_values(meta, record, customData)
+
+			-- predicate validations, this is where your data "must operate in this case"
+			if not are_datas_valid(meta, record, customData) then
+				success = false
+				return
+			end
+
+			data.__data = customData
+			record.Data = deepfreeze(customData)
+
+			meta._DirtySave[record.Key] = true
+		end)
+
+		if not success then
+			throw(meta, record, "Something error happened when writing data.")
+			record._SaveProgress = false
+			return false
+		end
+
+		push_compression_timer(meta, record)
+
+		local success = enqueue_save(meta, record)
+
+		record._SaveProgress = false
+		if success then
+			dispatch(meta, record, "OnWrite")
+			return true
+		end
+
+		return false
+	end
+
+	-- Same as Save() but the data is commiting explicitly into datastore
+	-- Use it for immediate saving operations, ex. Player Leaving or Manual Trading
+	-- However, Standby() has given you a service for saving data automatically, with this ForceSave()
+	-- But you can use it anyway, the explicit data commiting is still in Mutex lock to prevent race conditions
+	function record:ForceSave(Data: any, SegmentIndex: number?)
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
+			return false
+		end
+
+		while record.CurrentState == "Running" do
+			task.wait()
+		end
+
+		local now = workspace:GetServerTimeNow()
+		while record._SaveProgress do
+			task.wait()
+		end
+		record._SaveProgress = true
+
+		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
+			record._SaveProgress = false
+			return false
+		end
+
+		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
+			record._SaveProgress = false
+			return false
+		end
+
+		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do ForceSave() operations. Please call Ready()")
+			record._SaveProgress = false
+			return false
+		end
+
+		local data = meta._DataCache[record.Key]
+		if not data or not data.__data then
+			throw(meta, record, "Data of this record is not loaded yet.")
+			record._SaveProgress = false
+			return false
+		end
+
+		if Data == nil then
+			throw(meta, record, "Data parameter in ForceSave() is nil")
+			record._SaveProgress = false
+			return false
+		end
+		record.CurrentState = "Running"
+
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+
+		local oldData = deepclone(data.__data)
+		local newData
+
+		local isSuccess = false
+		meta._LockSessions:Do(record.Key, function()			
+			if SegmentIndex then
+				data.__data[SegmentIndex] = Data
+			else
+				data.__data = Data
+			end		
+
+			local clonedRecord = deepclone(data)
+
+			newData = deepclone(data.__data)
+			record.Data = deepfreeze(data.__data)
+
+			local compressed, flag
+			local found = false
+
+			local existed = meta._CompressionStack[record.Key]
+
+			if existed then
+				if not existed.Dirty and record._LastCompressedData and record._LastFlagData then
+					compressed, flag = record._LastCompressedData, record._LastFlagData
+				else
+					local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedRecord.__data)
+
+					if not ok then 
+						throw(meta, record, "Failed to compare and compress the data in record.")
+						return false 
+					end
+
+					compressed, flag = newCompressed, newFlag
+
+					record._LastCompressedData = compressed
+					record._LastFlagData = flag
+
+					existed.Tick = now
+					existed.Dirty = false
+				end
+			else
+				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedRecord.__data)
+				if not ok then 
+					throw(meta, record, "Failed to compare and compress the data in record.")
+					return false 
+				end
+
+				compressed, flag = newCompressed, newFlag
+
+				record._LastCompressedData = compressed
+				record._LastFlagData = flag
+			end
+
+			clonedRecord.__version = (clonedRecord.__version or 0) + 1
+			clonedRecord.__flag = flag
+
+			record.Version = clonedRecord.__version
+
+			local success, result = pcall(function()
+				return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+					if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid and CurrentData.__bounds.lastheartbeat then
+						local id = CurrentData.__bounds.id
+						local serverid = CurrentData.__bounds.serverid
+						local lastheartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+						local isStale = now - lastheartbeat > meta.StaleServerClaimingTime
+
+						local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+						local isDifferentOwner = id and id ~= thisOwnerId
+
+						local isCacheStale = now - (clonedRecord.__bounds and clonedRecord.__bounds.since or 0) > meta.StaleServerClaimingTime
+
+						local isServerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.serverid and clonedRecord.__bounds.serverid ~= ServerId and clonedRecord.__bounds.serverid ~= serverid and not isCacheStale
+						local isOwnerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.id and clonedRecord.__bounds.id ~= thisOwnerId and clonedRecord.__bounds.id ~= id
+
+						if isServerNotSameAsCache or isOwnerNotSameAsCache then
+							return nil
+						end
+
+						if isDifferentServer or isDifferentOwner then
+							return nil
+						end
+					end
+
+					CurrentData = CurrentData or clonedRecord or deepclone(meta._CompressedBlueprint)
+
+					if clonedRecord.__version and CurrentData and clonedRecord.__version > (CurrentData.__version or 0) then
+						CurrentData = clonedRecord
+					end
+
+					CurrentData.__data = compressed
+					CurrentData.__bounds.lastheartbeat = now
+					CurrentData.__bounds.since = now
+					return CurrentData
+				end)
+			end)
+
+			isSuccess = success and result
+		end)
+
+		record._SaveProgress = false
+		record.CurrentState = "Ready"
+		if isSuccess then
+			local walSuccess, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
+
+			if walSuccess and result then
+				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
+			end
+
+			local index = 0
+			for i, pending in ipairs(meta._SavePendingQueue) do
+				if pending.Meta and pending.Meta.Key == record.Key then
+					index = i
+					break
+				end
+			end
+
+			if index then
+				table.remove(meta._SavePendingQueue, index)
+			end
+
+			local dirty = meta._DirtySave[record.Key]
+			if dirty then
+				meta._DirtySave[record.Key] = nil
+			end
+
+			dispatch(meta, record, "OnWrite", oldData, newData)
+
+			return true
+		end
+
+		throw(meta, record, "Failed to force save the data in record.")
+		return false
+	end
+
+	function record:ForceWrite(WritingFunction: (CurrentData: any) -> ())
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
+			return false
+		end
+
+		while record.CurrentState == "Running" do
+			task.wait()
+		end
+
+		local now = workspace:GetServerTimeNow()
+		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do ForceWrite() operations. Please call Ready()")
+			return false
+		end
+
+		while record._SaveProgress do
+			task.wait()
+		end
+		record._SaveProgress = true
+
+		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
+			record._SaveProgress = false
+			return false
+		end
+
+		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
+			record._SaveProgress = false
+			return false
+		end
+
+		local data = meta._DataCache[record.Key]
+		if not data or not data.__data then
+			throw(meta, record, "Data of this record is not loaded yet.")
+			record._SaveProgress = false
+			return false
+		end
+		record.CurrentState = "Running"
+
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+
+		local clonedRecord = deepclone(data)
+		local clonedData = deepclone(clonedRecord.__data)
+
+		local oldData = deepclone(data.__data)
+		local newData
+
+		local isSuccess = false
+		meta._LockSessions:Do(record.Key, function()
+			local success = pcall(WritingFunction, clonedData)
+
+			if not success then
+				throw(meta, record, "Failed to write the data in record.")
+				return false
+			end
+
+			if not are_schemas_valid(meta, record, clonedData) then
+				return false
+			end
+
+			clamp_values(meta, record, clonedData)
+
+			if not are_datas_valid(meta, record, clonedData) then
+				return false
+			end
+
+			data.__data = clonedData
+			newData = deepclone(clonedData)
+			record.Data = deepfreeze(clonedData)
+
+			local compressed, flag
+			local found = false
+
+			local existed = meta._CompressionStack[record.Key]
+
+			if existed then
+				if not existed.Dirty and record._LastCompressedData and record._LastFlagData then
+					compressed, flag = record._LastCompressedData, record._LastFlagData
+				else
+					local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedData)
+
+					if not ok then 
+						throw(meta, record, "Failed to compare and compress the data in record.")
+						return false 
+					end
+
+					compressed, flag = newCompressed, newFlag
+
+					record._LastCompressedData = compressed
+					record._LastFlagData = flag
+
+					existed.Tick = now
+					existed.Dirty = false
+				end
+			else
+				local ok, newCompressed, newFlag = pcall(compare_and_compress, meta, clonedData)
+				if not ok then 
+					throw(meta, record, "Failed to compare and compress the data in record.")
+					return false 
+				end
+
+				compressed, flag = newCompressed, newFlag
+
+				record._LastCompressedData = compressed
+				record._LastFlagData = flag
+			end
+
+			clonedRecord.__version = (clonedRecord.__version or 0) + 1
+			clonedRecord.__flag = flag
+
+			record.Version = clonedRecord.__version
+
+			local success, result = pcall(function()
+				return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+					if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and CurrentData.__bounds.serverid and CurrentData.__bounds.lastheartbeat then
+						local id = CurrentData.__bounds.id
+						local serverid = CurrentData.__bounds.serverid
+						local lastheartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+						local isStale = now - lastheartbeat > meta.StaleServerClaimingTime
+
+						local isDifferentServer = serverid ~= ServerId and not isStale
+						local isDifferentOwner = id ~= thisOwnerId
+
+						local isCacheStale = now - (clonedRecord.__bounds and clonedRecord.__bounds.since or 0) > meta.StaleServerClaimingTime
+
+						local isServerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.serverid and clonedRecord.__bounds.serverid ~= ServerId and clonedRecord.__bounds.serverid ~= serverid and not isCacheStale
+						local isOwnerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.id and clonedRecord.__bounds.id ~= thisOwnerId and clonedRecord.__bounds.id ~= id
+
+						if isServerNotSameAsCache or isOwnerNotSameAsCache then
+							return nil
+						end
+
+						if isDifferentServer or isDifferentOwner then
+							return nil
+						end
+					end
+
+					CurrentData = CurrentData or clonedRecord or deepclone(meta._CompressedBlueprint)
+
+					if clonedRecord.__version and CurrentData and clonedRecord.__version > (CurrentData.__version or 0) then
+						CurrentData = clonedRecord
+					end
+
+					CurrentData.__data = compressed
+					CurrentData.__bounds.lastheartbeat = now
+					CurrentData.__bounds.since = now
+					return CurrentData
+				end)
+			end)
+
+			isSuccess = success and result
+		end)
+
+		record._SaveProgress = false
+		record.CurrentState = "Ready"
+
+		if isSuccess then
+			local walSuccess, result = pcall(function() return meta._CurrentWALDataStore:GetAsync(record.Key) end)
+
+			if walSuccess and result then
+				pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
+			end
+
+			local index = 0
+			for i, pending in ipairs(meta._SavePendingQueue) do
+				if pending.Meta and pending.Meta.Key == record.Key then
+					index = i
+					break
+				end
+			end
+
+			if index then
+				table.remove(meta._SavePendingQueue, index)
+			end
+
+			local dirty = meta._DirtySave[record.Key]
+			if dirty then
+				meta._DirtySave[record.Key] = nil
+			end
+
+			dispatch(meta, record, "OnWrite", oldData, newData)
+			return true
+		end
+
+		throw(meta, record, "Failed to write the data of record.")
+		return false
+	end
+
+	-- Removing the record of this player
+	-- Where after this function called, nothing in the record could be used, because have been garbaged
+	-- Meanwhile, the record isn't actually destroy, instead it's archived
+	-- Whether you want to get the record back, you can use Unarchive() where recovering the archived record back into the player
+	-- But, in one condition, this function is actually destructive and dangerous. Make sure you're always thinking about what will happened when a record is archived
+	-- 
+	function record:Detach()
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
+			return false
+		end
+
+		while record.CurrentState == "Running" do
+			task.wait()
+		end
+
+		local now = workspace:GetServerTimeNow()
+		if not meta.ArchivationEnabled then
+			throw(meta, record, "Archivation is not enabled.")
+			return false
+		end
+
+		if meta.StrictlyUnallowDetaching then
+			throw(meta, record, "Detaching is not allowed in this mode.")
+			return false
+		end
+
+		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do Detach() operations. Please call Ready()")
+			return false
+		end
+
+		if record.CurrentState == "Died" then
+			throw(meta, record, "This record is currently died. You can't do any operations on this record.")
+			return false
+		end
+
+		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._SaveProgress then
+			throw(meta, record, "This record is in save progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._ArchivingProgress then
+			throw(meta, record, "This record is in archiving progress, unable to override current record's state process.")
+			return false
+		end
+		record._ArchivingProgress = true
+
+		local data = meta._DataCache[record.Key]
+		if not data then
+			throw(meta, record, "This record is not loaded yet.")
+			record._ArchivingProgress = false
+			return false
+		end
+
+		for i, pending in ipairs(meta._SavePendingQueue) do
+			if pending.Meta and pending.Meta.Key == record.Key then
+				table.remove(meta._SavePendingQueue, i)
+				break
+			end
+		end
+
+		local success, result = pcall(function()
+			return meta._CurrentDataStore:RemoveAsync(record.Key)
+		end)
+
+		if not success then
+			throw(meta, record, "Failed to remove data from data store. " .. tostring(result))
+			record._ArchivingProgress = false
+			return false
+		end
+
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+
+		meta._ActiveRecords[record.Key] = nil
+		meta._DataCache[record.Key] = nil
+		meta._WriteTimestamp[record.Key] = nil
+		meta._SwapTimestamp[record.Key] = nil
+		meta._AutosaveTimestamp[record.Key] = nil
+		meta._CompressionStack[record.Key] = nil
+		meta._LocalBroadcastListeners[record.Key] = nil
+		meta._DirtySave[record.Key] = nil
+
+		meta._TrackedClamps[record.Key] = nil
+		meta._TrackedSchemas[record.Key] = nil
+		meta._TrackedValidations[record.Key] = nil
+
+		record.Data = nil
+		record.Owner = nil
+		record.Version = 0
+		record.CurrentState = "Died"		
+
+		if meta.ArchivationEnabled and success and result then
+			local isArchived = false
+
+			while not isArchived do
+				local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+
+				if budget > 0 then
+					local archSuccess, archResult = pcall(function()
+						return meta._CurrentArchivedDataStore:UpdateAsync(record.Key, function(CurrentData)
+							if CurrentData and CurrentData.__bounds and CurrentData.__bounds.serverid and CurrentData.__bounds.id and CurrentData.__bounds.lastheartbeat then
+								local bounds = CurrentData.__bounds
+								local id = CurrentData.__bounds.id
+								local serverid = CurrentData.__bounds.serverid
+								local lastheartbeat = CurrentData.__bounds.lastheartbeat or 0
+
+								local isStale = now - lastheartbeat > meta.StaleServerClaimingTime
+								local isCacheStale = now - (result.__bounds and result.__bounds.lastheartbeat or 0) > meta.StaleServerClaimingTime
+
+								local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+								local isDifferentOwner = id and id ~= thisOwnerId
+
+								local isCacheServerDifferent = result.__bounds and result.__bounds.serverid and result.__bounds.serverid ~= serverid and result.__bounds.serverid ~= ServerId and not isCacheStale
+								local isCacheDifferentOwner = result.__bounds and result.__bounds.id and result.__bounds.id ~= id and result.__bounds.id ~= thisOwnerId
+
+								if isDifferentOwner or isDifferentServer or isCacheServerDifferent or isCacheDifferentOwner then
+									return nil
+								end
+							end
+
+							CurrentData = result
+							CurrentData.__bounds = {
+								id = thisOwnerId,
+								since = now,
+							}
+							return CurrentData
+						end)
+					end)
+
+					if archSuccess and archResult then
+						isArchived = true
+						record.IsArchived = true
+						record._ArchivingProgress = false
+
+						local find = find_standby_index(meta, record.Key)
+						if find then
+							table.remove(meta._StandbyRegistry, find)
+						end
+
+						dispatch(meta, record, "OnArchived")
+						return true
+					end
+				end
+
+				task.wait()
+			end
+		end
+		record._ArchivingProgress = false
+		throw(meta, record, "Fatal error while trying to archive the record.")
+
+		return false
+	end
+
+	function record:Unarchive()
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
+			return false
+		end
+
+		local now = workspace:GetServerTimeNow()
+		if not meta.ArchivationEnabled then
+			throw(meta, record, "Archivation is not enabled.")
+			return false
+		end
+
+		if record.CurrentState ~= "Asleep" and record.CurrentState ~= "Died" then
+			throw(meta, record, "Record is not currently asleep or died.")
+			return false
+		end
+
+		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._SaveProgress then
+			throw(meta, record, "This record is in save progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._ArchivingProgress then
+			throw(meta, record, "This record is in archiving progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._UnarchivingProgress then
+			throw(meta, record, "This record is in unarchiving progress, unable to override current record's state process.")
+			return false
+		end
+		record._UnarchivingProgress = true
+
+		local success, unarchivedData = pcall(function()
+			return meta._CurrentArchivedDataStore:GetAsync(record.Key)
+		end)
+
+		if not success then
+			throw(meta, record, "Failed to get archived record from data store. " .. tostring(unarchivedData))
+			record._UnarchivingProgress = false
+			return false
+		end
+
+		local thisOwnerId = record.Owner and record.Owner.UserId or 0
+		if success and unarchivedData then
+			while meta.Enabled and UDataComponent.Enabled do
+				local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+
+				if budget > 0 then
+					local unarchSuccess, unarchResult = pcall(function()
+						return meta._CurrentDataStore:UpdateAsync(record.Key, function(CurrentData)
+							if CurrentData and CurrentData.__bounds and CurrentData.__bounds.id and unarchivedData.__bounds and unarchivedData.__bounds.id then
+								local id = CurrentData.__bounds.id
+								local archiveId = unarchivedData.__bounds.id
+
+								if id ~= archiveId or id ~= thisOwnerId or archiveId ~= thisOwnerId then
+									return nil
+								end
+							end
+
+							CurrentData = unarchivedData
+
+							CurrentData.__bounds = {
+								id = CurrentData.__bounds and CurrentData.__bounds.id or thisOwnerId,
+								since = CurrentData.__bounds and CurrentData.__bounds.since or now,
+							}
+							return CurrentData
+						end)
+					end)
+
+					if unarchSuccess and unarchResult then
+						record._UnarchivingProgress = false
+
+						record.CurrentState = "Asleep"
+						record.IsArchived = false
+
+						pcall(function()
+							meta._CurrentArchivedDataStore:RemoveAsync(record.Key)
+						end)
+
+						dispatch(meta, record, "OnUnarchived")
+						return true
+					end
+				end
+
+				task.wait()
+			end
+		end
+		record._UnarchivingProgress = false
+		throw(meta, record, "Failed to unarchive data.")
+
+		return false
+	end
+
+	function record:IsRecorded()
+		return meta._ActiveRecords[record.Key] ~= nil and record.Data ~= nil and meta._DataCache[record.Key] ~= nil
+	end
+
+	return record	
+end
+
+function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Configurations: { [string]: any?}) : UDCInfo
+	Scope = Scope or "global"
+	Configurations = Configurations or {}
+
+	local storageKey = DataStoreName .. "-" .. Scope
+	if InfosStorage[storageKey] then
+		return InfosStorage[storageKey]
+	end
 
 	local self = setmetatable({}, UDataComponent)
+
+	self.Name = DataStoreName
+	self.Scope = Scope
 
 	self.Enabled = true
 	self.ValidationEnabled = true
 	self.CallbackEnabled = true
-	self.RequestTimestampCooldown = 2
-	self.DefaultDataLoadingAttempts = 5
-	self.DefaultDataLoadingYieldDuration = 3
-	self.WALEnabled = false
-	self.WritingDataAgeEnabled = false
-	self.DefaultSaveAttempts = 5
-	self.DefaultYieldAttempts = 3
+	self.WALEnabled = true
+	self.DataWritingCooldown = 3
 	self.MaxKeyLength = 50
 	self.BackupEnabled = true
-	self.BackupYieldDuration = 3
+	self.DefaultBackupAttempts = 5
+	self.DefaultBackupYieldDuration = 3
 	self.StrictlyUnallowDetaching = true
-	self.BackupRemovedWhenDetached = false
 	self.AutoSaveEnabled = true
 	self.AutoSaveInterval = 300
 	self.WALDataSuffix = "_wal"
-	self.WALMaxEntries = 50
-	self.BackupDataSuffix = "_backup"
-	self.ExclusiveAccessEnabled = true
-	self.ExclusiveAccessExpiration = 1 -- 1 Day
+	self.OwnershipExpiration = 1 -- 1 Day
 	self.SwappingEnabled = true
 	self.SwappingCooldown = 5
 	self.CacheCleaningEnabled = true
 	self.CacheCleaningInterval = 300
-	self.CanDataExpired = false
-	self.DataExpiredDuration = 300
 	self.DataBlueprint = {}
 	self.ErrorReasonNamespace = "UDataComponent"
+	self.CompressionLevel = 10
+	self.CompressionThreshold = 5 -- Threshold of 5 bytes from the overhead
+	self.CompressionQueueCooldown = 30
+	self.MaxDecompressedSize = 4194304 -- 4 MB - 1 Byte
 	self.LocalDataNamespace = "LUDataComponent"
 	self.MessagingEnabled = false
-	self.MessagingNamespace = "UDataComponentReplication"
+	self.MessagingNamespace = "UDCBroadcast"
+	self.MessagingExpiration = 10 -- 10 seconds
+	self.MessagingMaxPacketSize = 900 -- 900 bytes
 	self.MessagingSendingCooldown = 5
 	self.MessagingReceivingCooldown = 5
 	self.MessagingLocalListeningCooldown = 5
-	self.ServerClaimerSuffix = "_possessive_claimer"
 	self.ArchivationEnabled = true
-	self.ArchivationSuffix = "_archive"
-	self.MessagingDebugEnabled = false
+	self.ArchivationSuffix = "_archived"
 	self.MaxDataSavingPerTick = 4
+	self.MaxDataObtainingPerTick = 4
+	self.MaxConcurrentSaveWorkers = 5
+	self.MaxConcurrentLoadWorkers = 5
+	self.MaxConcurrentAutosaveWorkers = 5
+	self.MaxStandbyWorkers = 10
+	self.StaleServerClaimingTime = 90
+	self.ShutdownSecondsToken = 25
 
-	self._CurrentDataStore = DataStoreService:GetDataStore(DataStoreName, _scope)
-	self._CurrentWALDataStore = DataStoreService:GetDataStore(DataStoreName..self.WALDataSuffix, _scope)
-	self._CurrentBackupDataStore = DataStoreService:GetDataStore(DataStoreName..self.BackupDataSuffix, _scope)
-	self._CurrentArchivedDataStore = DataStoreService:GetDataStore(DataStoreName..self.ArchivationSuffix, _scope)
-	self._DataStoreName = DataStoreName
-	
-	self._GetTimestamp = {} -- { [Key: string] = timestamp: number }
-	self._SaveTimestamp = {} -- { [Key: string] = timestamp: number }
+	local clone = deepclone(self.DataBlueprint)
+	local compressedBp, flagBp = compare_and_compress(self, clone)
+
+	-- Clone of data template/blueprint for the record
+	self._CompressedBlueprint = {
+		__version = 0, -- Seed of the version for the record
+		__bounds = nil, -- Seed of bounding data for the record
+		__data = compressedBp, -- buffer of the data, regardless was compressed or not
+		__flag = flagBp -- Flag of the data, to indicate if the data was compressed or not, 'C' for compressed, 'R' or else for not
+	}
+
+	self._CurrentDataStore = DataStoreService:GetDataStore(DataStoreName, Scope)
+	self._CurrentWALDataStore = DataStoreService:GetDataStore(DataStoreName..self.WALDataSuffix, Scope)
+	self._CurrentArchivedDataStore = DataStoreService:GetDataStore(DataStoreName..self.ArchivationSuffix, Scope)	
+
+	self._ActiveRecords = {} -- { [Key: string] = UDCRecord }
+	self._WriteTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._SwapTimestamp = {} -- { [Key: string] = timestamp: number }
 	self._AutosaveTimestamp = {} -- { [Key: string] = timestamp: number }
-	self._SavePendingQueue = {} -- { [Key: string] = {Key, Data, WAL, Backup, IsSafe } }
+	self._SavePendingQueue = {} -- { {Meta: UDCRecord, Thread: thread} }
+	self._ObtainPendingQueue = {} -- { {Meta: UDCRecord, Thread: thread} }
+	self._BroadcastPendingQueue = {} -- { [Key] = { Packet: any, HasTarget: boolean }
+	self._UnreadyData = {} -- { [Key: string] = true }
 	self._DataCache = {} -- { [Key: string] = Data: any }
-	self._BoundRegistry = {} -- { [Key: string] = table }
+	self._CompressionStack = {} -- { [Key: string] = {Record: UDCRecord, Tick: number} }
+	self._StandbyRegistry = {} -- { {Record, Key} }
+	self._DirtySave = {} -- { [Key: string] = true }
 	self._LockSessions = ScopedMutex.new(Mutex)
-	self._LockTimers = {}
+	self._BroadcastingTimestamps = {} -- { [Key: string] = timestamp: number }
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
 
-	self._ExclusiveTimerCalled = false
 	self._ShutdownCalled = false
 	self._ExclusiveSafetyCalled = false
-	self._IsRunning = false
+	self._IsSaveRunning = false
+	self._IsObtainingRunning = false
+	self._IsCompressionTimerRunning = false
 	self._CacheCleaningCalled = false
-	self._ClaimedSyncCalled = false
-	
-	self._CacheCleaningThread = nil
+	self._StandbyReady = false
+	self._AutosaveCalled = false
+	self._RecordBroadcastCalled = false
+	self._BroadcastQueueRunning = false
 
-	self._TrackedValidations = {} -- { [Key] = { Member = ValidationFunction, ... } }
-	self._TrackedSchemas = {} -- { [Key] = { Member = ValidationFunction, ... } }
-	self._TrackedClamps = {} -- { [Key] = { Member = ValidationFunction, ... } }
-	
-	self._UDataComponentCallbacks = SDictionary.new("string", "table", {
-		OnDataLoading = {},
-		OnDataLoaded = {},
-		OnDataSaving = {},
-		OnDataSaved = {},
-		OnDataArchived = {},
-		OnDataUnarchived = {},
-		OnDataRecovery = {},
-		OnDataCached = {},
-		OnDataRemoved = {},
-		OnDataBinding = {},
-		OnDataUnbinding = {},
-		OnDataBindRefreshed = {},
-		OnDataBindExpired = {},
-		OnCacheCleaned = {},
-		OnTransactionBegin = {},
-		OnTransactionFiltered = {},
-		OnTransactionEnded = {},
+	self._CurrentLoadWorkers = 0
+	self._CurrentSaveWorkers = 0
+	self._CurrentAutoSaveWorkers = 0
+
+	self._TrackedValidations = {} -- { [Key] = { Predicate = ValidationFunction, Penetration = number or 1 } }
+	self._TrackedSchemas = {} -- { [Key] = { Schema = string, Penetration = number or 1 } }
+	self._TrackedClamps = {} -- { [Key] = { Min = number?, Max = number?, Penetration = number or 1 } }
+
+	self._UDataComponentDynamicCallbacks = {
 		OnReleased = {},
-		OnDataError = {},
-		OnSendingBroadcast = {},
-		OnReceivingBroadcast = {},
-		OnLocalBroadcastListenerReady = {},
-		OnLocalBroadcastListenerCalled = {},
-		OnLocalBroadcastListenerClosed = {}
-	})
-	
-	self._UDataComponentDynamicCallbacks = SDictionary.new("string", "table", {
-		OnDataLoading = {},
-		OnDataLoaded = {},
-		OnDataSaving = {},
-		OnDataSaved = {},
-		OnDataArchived = {},
-		OnDataUnarchived = {},
-		OnDataRecovery = {},
-		OnDataCached = {},
-		OnDataRemoved = {},
-		OnDataBinding = {},
-		OnDataUnbinding = {},
-		OnDataBindRefreshed = {},
-		OnDataBindExpired = {},
-		OnCacheCleaned = {},
-		OnTransactionBegin = {},
-		OnTransactionFiltered = {},
-		OnTransactionEnded = {},
-		OnReleased = {},
-		OnDataError = {},
-		OnSendingBroadcast = {},
-		OnReceivingBroadcast = {},
-		OnLocalBroadcastListenerReady = {},
-		OnLocalBroadcastListenerCalled = {},
-		OnLocalBroadcastListenerClosed = {}
-	})
+		OnReady = {},
+		OnSaved = {},
+		OnLoaded = {},
+		OnStandby = {},
+		OnAutoSaved = {},
+		OnArchived = {},
+		OnUnarchived = {},
+
+		OnWrite = {},
+
+		OnBroadcastSent = {},
+		OnBroadcastReceived = {},
+
+		OnRecordBroadcastReceived = {},
+
+		OnError = {},
+		OnDataFiltered = {},
+
+		OnOwnershipExpired = {}
+	}
 
 	if Configurations then
 		for key, value in pairs(Configurations) do
@@ -2641,51 +3624,65 @@ function UDataComponent.InDataInfo(DataStoreName : string, Scope : string?, Conf
 		end
 	end
 
-	return self
+	InfosStorage[storageKey] = self
+	return self :: UDCInfo
 end
 
---[[
-	@param Key: string | number
-	@param Callbacks: {UDataComponentCallbackFunctions?}
-	@return UDataComponentRecord
-]]
-function UDataComponent:GetPlayerData(Key : string | number, Callbacks : {UDataComponentCallbackFunctions?}) : UDataComponentRecord
-	if Callbacks then
-		for key, value in pairs(Callbacks) do
-			local currentFunc = self._UDataComponentCallbacks:Get(key)
+function UDataComponent.IsAlive()
+	local success, result = pcall(function()
+		return ConnectionTest:UpdateAsync("TestConnection", function(oldData)
+			return "Alive"
+		end)
+	end)
 
-			if currentFunc then
-				currentFunc[Key] = value
-			end
-		end
-	end
-	
+	return success and result == "Alive" and UDataComponent.Enabled
+end
+
+function UDataComponent:GetCurrentRecord(Key: number | string, OwnerOfThisData: Player?) : UDCRecord
 	if typeof(Key) == "string" and #Key > self.MaxKeyLength then
-		warn("[ .. " .. self.ErrorReasonNamespace .. "] : Key is too long")
-		
+		warn(string.format("[%s] : Key is too long", self.ErrorReasonNamespace))
 		Key = string.sub(Key, 1, tonumber(self.MaxKeyLength))
 	end
 
-	return InPlayerData(self, Key) :: UDataComponentRecord
+	return current_record(self, Key, OwnerOfThisData) :: UDCRecord
 end
 
-function UDataComponent:GetLocalData(Callbacks : {UDataComponentCallbackFunctions?}) : UDataComponentRecord
-	local locKey = self.LocalDataNamespace .. "@" .. self._DataStoreName
-	if Callbacks then
-		for key, value in pairs(Callbacks) do
-			local currentFunc = self._UDataComponentCallbacks:Get(key)
-			
-			if currentFunc then
-				currentFunc[key] = value
-			end
-		end
+function UDataComponent:ViewCurrentRecord(Key: number | string, Version: string?) : UDCRecord
+	if typeof(Key) == "string" and #Key > self.MaxKeyLength then
+		warn(string.format("[%s] : Key is too long", self.ErrorReasonNamespace))
+		Key = string.sub(Key, 1, tonumber(self.MaxKeyLength))
 	end
-	
-	return InPlayerData(self, locKey) :: UDataComponentRecord
+
+	local ResultData
+	if Version then
+		local success, result = pcall(function()
+			return self._CurrentDataStore:GetVersionAsync(Key, Version)
+		end)
+
+		if success and result then ResultData = result else return nil end
+	else
+		local success, result = pcall(function()
+			return self._CurrentDataStore:GetAsync(Key)
+		end)
+
+		if success and result then ResultData = result else return nil end
+	end
+
+	local success, decompressed = pcall(Compressor.TryToDecompress, ResultData and ResultData.__data, ResultData and ResultData.__flag)
+
+	if not success then
+		return nil
+	end
+
+	local plr = Players:GetPlayerByUserId(ResultData and ResultData.__bounds and ResultData.__bounds.id)
+
+	return deepfreeze({ Version = ResultData and ResultData.__version or 0, Owner = plr or nil, Data = decompressed })
 end
 
-function UDataComponent:GetDataStoreName() : string
-	return self._DataStoreName
+function UDataComponent:GetLocalRecord() : UDCRecord
+	local locKey = self.LocalDataNamespace .. "@" .. self._DataStoreName
+
+	return current_record(self, locKey, nil) :: UDCRecord
 end
 
 return UDataComponent :: UDataComponent
