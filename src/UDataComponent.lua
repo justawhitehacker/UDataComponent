@@ -1947,7 +1947,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 			return false
 		end
 		
-		local finishedData = deepclone(data)
+		local finishedData = deepclone(data.__data)
 		
 		local timestamp = workspace:GetServerTimeNow()
 		local ownerId = record.Owner and record.Owner.UserId or 0
@@ -1992,7 +1992,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 			return false
 		end
 		
-		local finishedData = deepclone(data)
+		local finishedData = deepclone(data.__data)
 		
 		local timestamp = workspace:GetServerTimeNow()
 		local ownerId = record.Owner and record.Owner.UserId or 0
