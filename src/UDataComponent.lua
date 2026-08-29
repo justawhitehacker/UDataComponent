@@ -549,7 +549,7 @@ export type UDCBroadcasting = {
 	-- (ULTIMATELY SUSPENDING) Waiting for global broadcast packet from other server
 	SendLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, OtherThings: any?) -> boolean,
 	-- Sending local broadcast to other server that listening on the channel
-	ListenToLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
+	ListenToLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCListenerConnector,
 	-- Listening for local broadcast from other server
 	SendBroadcastToRecord: (UDCBroadcasting: UDCBroadcasting, TargetKey: string | number, OtherThings: any) -> boolean
 	-- Sending broadcast to specific record in other server
@@ -568,6 +568,10 @@ export type UDCEventConnector = {
 	Wait: (self: UDCEventConnector) -> any,
 	Disconnect: (self: UDCEventConnector) -> (),
 	DisconnectAfterCalled: (self: UDCEventConnector) -> (),
+}
+
+export type UDCListenerConnector = {
+	Disconnect: (self: UDCListenerConnector) -> (),
 }
 
 export type UDCReadOnlyRecord = {
@@ -2028,7 +2032,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 				if not success then return end
 				
 				if data.BroadcasterServerId == ServerId then return end
-				if workspace:GetServerTimeNow() - data.BroadcastTime > Timeout then return end
+				if workspace:GetServerTimeNow() - data.BroadcastTime > meta.MessagingExpiration then return end
 				
 				local finishedData = deepclone(data)
 				
@@ -2095,7 +2099,58 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	end
 	
 	function broadcasting:ListenToLocalBroadcast(ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any)
+		if not meta.MessagingEnabled then
+			throw(meta, record, "Messaging is disabled.")
+			return nil
+		end
 		
+		local completedName = meta.ErrorReasonNamespace .. "-" .. ChannelName
+		local connection
+		
+		local disconnected = false
+		local methods = {}
+		
+		function methods:Disconnect()
+			if disconnected then return end
+			disconnected = true
+			
+			if connection then connection:Disconnect() end
+		end
+		
+		local success, err = pcall(function()
+			connection = MessagingService:SubscribeAsync(completedName, function(message)
+				if disconnected then return end
+				
+				local rawData = message.Data
+				if not rawData then return end
+				
+				local compressedData = rawData.__data
+				local flag = rawData.__flag
+				
+				local decompressedSuccess, data = pcall(Compressor.TryToDecompress, compressedData, flag)
+				if not decompressedSuccess then return end
+				
+				if data.BroadcasterServerId == ServerId then return end
+				if workspace:GetServerTimeNow() - data.BroadcastTime > meta.MessagingExpiration then return end
+				
+				local packet = deepfreeze({
+					BroadcasterKey = data.BroadcasterKey,
+					BroadcasterData = data,
+					BroadcasterServerId = data.BroadcasterServerId,
+					BroadcasterOwnerId = data.BroadcasterOwnerId,
+					BroadcastTime = data.BroadcastTime,
+					OtherThings = data.OtherThings or {},
+				})
+				task.spawn(Listener, packet)
+			end)
+		end)
+		
+		if not success then
+			throw(meta, record, "Error while listening to broadcast: " .. err)
+			return nil
+		end
+		
+		return methods
 	end
 	
 	function broadcasting:SendBroadcastToRecord(TargetKey: string | number, OtherThings: any?)
