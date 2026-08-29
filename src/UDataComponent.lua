@@ -1927,14 +1927,48 @@ end
 local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDCRecord, recordBroadcastSuffix: string, globalBroadcastSuffix: string)
 	local broadcasting = {}
 	
+	-- in UDC's Broadcasting, there are three types of broadcasting:
+	-- 1. Global Broadcasting -- this is where current record broadcasting globally to all servers
+	-- 2. Record Broadcasting -- this is where current record broadcasting to specific record from other server
+	-- 3. Local Broadcasting -- this is where current record broadcasting to other servers that listening to the same channel
+	
 	local recordBroadcastName = meta.MessagingNamespace .. "-" .. recordBroadcastSuffix
 	local globalBroadcastName = meta.MessagingNamespace .. "-" .. globalBroadcastSuffix
 	
 	function broadcasting:BroadcastCurrentData(OtherThings: any?)
+		if not meta.MessagingEnabled then
+			throw(meta, record, "Messaging is disabled.")
+			return false
+		end
 		
+		local data = meta._DataCache[record.Key]
+		if not data then
+			throw(meta, record, "Data is not loaded.")
+			return false
+		end
+		
+		local finishedData = deepclone(data)
+		
+		local timestamp = workspace:GetServerTimeNow()
+		local ownerId = record.Owner and record.Owner.UserId or 0
+		local key = record.Key
+		
+		local packet = {
+			BroadcasterKey = key,
+			BroadcasterData = finishedData,
+			BroadcasterServerId = ServerId,
+			BroadcasterOwnerId = ownerId,
+			BroadcastTime = timestamp,
+			OtherThings = OtherThings or {}
+		}
+		
+		local success, err = pcall(enqueue_broadcast, meta, record, globalBroadcastName, packet)
+		
+		return success
 	end
 	
-	function broadcasting:WaitForBroadcastPacket()
+	function broadcasting:WaitForBroadcastPacket(Timeout: number?)
+		Timeout = Timeout or 50
 		
 	end
 	
