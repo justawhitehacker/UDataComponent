@@ -1412,8 +1412,18 @@ local function run_broadcast_queue(meta : __UDCInfo_Internal)
 				item.Packet.__target = item.Target
 			end
 			
+			local successCompressed, compressed, flag = pcall(compare_broadcast_payload, meta, item.Packet)
+			if not successCompressed then 
+				throw(meta, item.Record, "Unable to broadcast packet, reason: " .. tostring(compressed))
+				continue 
+			end
+			
+			local deliver = {}
+			deliver.__data = compressed
+			deliver.__flag = flag
+			
 			local success, err = pcall(function()
-				return MessagingService:PublishAsync(item.Channel, item.Packet)
+				return MessagingService:PublishAsync(item.Channel, deliver)
 			end)
 			
 			record_broadcast_sent(meta)
@@ -1846,7 +1856,16 @@ local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal, record
 	
 	local recordBrSuccess, recordBrErr = pcall(function()
 		return MessagingService:SubscribeAsync(recordBroadcastName, function(message)
-			local data = message.Data
+			local rawData = message.Data
+			if not rawData then return end
+			
+			local compressedData = rawData.__data
+			local flag = rawData.__flag
+			if not compressedData or not flag then return end
+			
+			local success, data = pcall(Compressor.TryToDecompress, compressedData, flag)
+			if not success then return end
+			
 			if data and data.BroadcasterServerId == ServerId then 
 				return 
 			end
@@ -1891,7 +1910,16 @@ local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal, record
 	
 	local globalBrSuccess, globalBrErr = pcall(function()
 		return MessagingService:SubscribeAsync(globalBroadcastName, function(message)
-			local data = message.Data
+			local rawData = message.Data
+			if not rawData then return end
+
+			local compressedData = rawData.__data
+			local flag = rawData.__flag
+			if not compressedData or not flag then return end
+
+			local success, data = pcall(Compressor.TryToDecompress, compressedData, flag)
+			if not success then return end
+			
 			if data and data.BroadcasterServerId == ServerId then 
 				return 
 			end
@@ -1969,7 +1997,24 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	
 	function broadcasting:WaitForBroadcastPacket(Timeout: number?)
 		Timeout = Timeout or 50
+		local currentThread = coroutine.running()
 		
+		local connection
+		local called = false
+		
+		local success, err = pcall(function()
+			connection = MessagingService:SubscribeAsync(globalBroadcastName, function(message)
+				if called then return end
+				called = true
+				
+				local data = message.Data
+				if not data then return end
+				
+				
+			end)
+		end)
+		
+		local packet = coroutine.yield()
 	end
 	
 	function broadcasting:SendLocalBroadcast(ChannelName: string, OtherThings: any?)
