@@ -2017,6 +2017,9 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 				local success, data = pcall(Compressor.TryToDecompress, compressedData, flag)
 				if not success then return end
 				
+				if data.BroadcasterServerId == ServerId then return end
+				if workspace:GetServerTimeNow() - data.BroadcastTime > Timeout then return end
+				
 				local finishedData = deepclone(data)
 				
 				task.spawn(currentThread, finishedData)
