@@ -1992,10 +1992,20 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 		
 		local success, err = pcall(enqueue_broadcast, meta, record, globalBroadcastName, packet)
 		
+		if not success then
+			throw(meta, record, "Unable to broadcast current data, reason: " .. tostring(err))
+			return false
+		end
+		
 		return success
 	end
 	
 	function broadcasting:WaitForBroadcastPacket(Timeout: number?) : UDCBroadcastingPacket
+		if not meta.MessagingEnabled then
+			throw(meta, record, "Messaging is disabled.")
+			return nil
+		end
+		
 		Timeout = Timeout or 50
 		local currentThread = coroutine.running()
 		
@@ -2047,7 +2057,41 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	end
 	
 	function broadcasting:SendLocalBroadcast(ChannelName: string, OtherThings: any?)
+		if not meta.MessagingEnabled then
+			throw(meta, record, "Messaging is disabled.")
+			return false
+		end
 		
+		local data = meta._DataCache[record.Key]
+		if not data then
+			throw(meta, record, "Data is not loaded.")
+			return false
+		end
+		
+		local completedName = meta.ErrorReasonNamespace .. "-" .. ChannelName
+		local finishedData = deepclone(data.__data)
+		
+		local timestamp = workspace:GetServerTimeNow()
+		local ownerId = record.Owner and record.Owner.UserId or 0
+		local key = record.Key
+		
+		local packet = {
+			BroadcasterKey = key,
+			BroadcasterData = finishedData,
+			BroadcasterServerId = ServerId,
+			BroadcasterOwnerId = ownerId,
+			BroadcastTime = timestamp,
+			OtherThings = OtherThings or {}
+		}
+		
+		local success, err = pcall(enqueue_broadcast, meta, record, completedName, packet)
+		
+		if not success then
+			throw(meta, record, "Error while sending broadcast packet: " .. err)
+			return false
+		end
+		
+		return success
 	end
 	
 	function broadcasting:ListenToLocalBroadcast(ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any)
@@ -2082,6 +2126,11 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 		}
 		
 		local success, err = pcall(enqueue_broadcast, meta, record, recordBroadcastName, packet, TargetKey)
+		
+		if not success then
+			throw(meta, record, "Error while sending broadcast packet: " .. err)
+			return false
+		end
 		
 		return success
 	end
