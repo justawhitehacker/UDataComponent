@@ -551,7 +551,7 @@ export type UDCBroadcasting = {
 	-- Sending local broadcast to other server that listening on the channel
 	ListenToLocalBroadcast: (UDCBroadcasting: UDCBroadcasting, ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any) -> UDCEventConnector,
 	-- Listening for local broadcast from other server
-	SendBroadcastToRecord: (UDCBroadcasting: UDCBroadcasting, Key: string | number, OtherThings: any) -> boolean
+	SendBroadcastToRecord: (UDCBroadcasting: UDCBroadcasting, TargetKey: string | number, OtherThings: any) -> boolean
 	-- Sending broadcast to specific record in other server
 }
 
@@ -1837,12 +1837,15 @@ local function create_event_class(meta : __UDCInfo_Internal, record : UDCRecord)
 	return events :: UDCEvent
 end
 
-local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal)
+local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal, recordName : string, globalName : string)
 	if not meta.MessagingEnabled or meta._RecordBroadcastCalled then return end
 	meta._RecordBroadcastCalled = true
 	
-	local success, err = pcall(function()
-		return MessagingService:SubscribeAsync(meta.MessagingNamespace .. "-RecordBroadcast", function(message)
+	local recordBroadcastName = meta.MessagingNamespace .. "-" .. recordName
+	local globalBroadcastName = meta.MessagingNamespace .. "-" .. globalName
+	
+	local recordBrSuccess, recordBrErr = pcall(function()
+		return MessagingService:SubscribeAsync(recordBroadcastName, function(message)
 			local data = message.Data
 			if data and data.BroadcasterServerId == ServerId then 
 				return 
@@ -1858,7 +1861,7 @@ local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal)
 			local record = meta._ActiveRecords[target]		
 			if not record then return end
 			
-			if workspace:GetServerTimeNow() + meta.MessagingExpiration > timestamp then 
+			if workspace:GetServerTimeNow() - timestamp > meta.MessagingExpiration then 
 				throw(meta, record, "Received broadcast packet is expired or invalid.")
 				return 
 			end
@@ -1881,13 +1884,51 @@ local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal)
 		end)
 	end)
 	
-	if not success then
-		warn("[UDataComponent-InternalErr]: " .. err)
+	if not recordBrSuccess then
+		warn("[UDataComponent-InternalErr]: " .. recordBrErr)
+		return
+	end
+	
+	local globalBrSuccess, globalBrErr = pcall(function()
+		return MessagingService:SubscribeAsync(globalBroadcastName, function(message)
+			local data = message.Data
+			if data and data.BroadcasterServerId == ServerId then 
+				return 
+			end
+			
+			local timestamp = data.BroadcastTime or 0
+			local key = data.BroadcasterKey or 0
+			local ownerId = data.BroadcasterOwnerId or 0
+			
+			if workspace:GetServerTimeNow() - timestamp > meta.MessagingExpiration then return end
+			
+			local broadcasterData = data.BroadcasterData
+			if not broadcasterData then return end
+			
+			local packet = deepfreeze({
+				BroadcasterKey = key,
+				BroadcasterData = broadcasterData,
+				BroadcasterServerId = data.BroadcasterServerId,
+				BroadcasterOwnerId = data.BroadcasterOwnerId,
+				BroadcastTime = timestamp,
+				OtherThings = data.OtherThings or {}
+			})
+			for _, record in pairs(meta._ActiveRecords) do
+				dispatch(meta, record, "OnRecordBroadcastReceived", packet)
+			end
+		end)
+	end)
+	
+	if not globalBrSuccess then
+		warn("[UDataComponent-InternalErr]: " .. globalBrErr)
 	end
 end
 
-local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDCRecord)
+local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDCRecord, recordBroadcastSuffix: string, globalBroadcastSuffix: string)
 	local broadcasting = {}
+	
+	local recordBroadcastName = meta.MessagingNamespace .. "-" .. recordBroadcastSuffix
+	local globalBroadcastName = meta.MessagingNamespace .. "-" .. globalBroadcastSuffix
 	
 	function broadcasting:BroadcastCurrentData(OtherThings: any?)
 		
@@ -1905,7 +1946,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 		
 	end
 	
-	function broadcasting:SendBroadcastToRecord(Key: string | number, OtherThings: any?)
+	function broadcasting:SendBroadcastToRecord(TargetKey: string | number, OtherThings: any?)
 		if not meta.MessagingEnabled then
 			throw(meta, record, "Messaging is disabled.")
 			return false
@@ -1921,7 +1962,20 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 		
 		local timestamp = workspace:GetServerTimeNow()
 		local ownerId = record.Owner and record.Owner.UserId or 0
+		local key = record.Key
 		
+		local packet = {
+			BroadcasterKey = key,
+			BroadcasterData = finishedData,
+			BroadcasterServerId = ServerId,
+			BroadcasterOwnerId = ownerId,
+			BroadcastTime = timestamp,
+			OtherThings = OtherThings or {}
+		}
+		
+		local success, err = pcall(enqueue_broadcast, meta, record, recordBroadcastName, packet, TargetKey)
+		
+		return success
 	end
 	
 	return broadcasting
@@ -1932,6 +1986,9 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		return meta._ActiveRecords[key]
 	end
 	
+	local recordBroadcastSuffix = "RecordBroadcast" -- broadcast suffix along with the namespace, where this is used for record broadcasting
+	local globalBroadcastSuffix = "GlobalBroadcast" -- broadcast suffix along with the namespace, where this is used for global broadcasting
+	
 	local record = {}
 	record.Key = key -- This is the key of the record
 	record.Owner = owner -- This is the owner of the record
@@ -1939,7 +1996,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.Event = create_event_class(meta, record) -- Utils of events for this record
 	record.Validation = create_validation_class(meta, record) -- Utils to create validation for this record
 	record.Swap = nil -- (COMING SOON!) Utils to swap data with other record
-	record.Broadcasting = create_broadcasting_class(meta, record) -- Utils to Broadcasting to other servers
+	record.Broadcasting = create_broadcasting_class(meta, record, recordBroadcastSuffix, globalBroadcastSuffix) -- Utils to Broadcasting to other servers
 	record.Version = 0 -- This is the version of the data, it will be increased when the data is saved
 	record.Data = nil -- This is the data of the record
 	record.CurrentState = "Asleep"
@@ -2195,7 +2252,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		meta._ActiveRecords[record.Key] = record -- Add the record to active records, so developer can access the record
 		
 		push_to_autosave(meta, record)
-		set_broadcast_record_subscriber(meta) -- first time Ready initialized, broadcast subscriber will be set
+		set_broadcast_record_subscriber(meta, recordBroadcastSuffix, globalBroadcastSuffix) -- first time Ready initialized, broadcast subscriber will be set
 		
 		record._ReadyProgress = false
 		
