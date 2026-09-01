@@ -305,6 +305,7 @@ export type __UDCInfo_Internal = {
 	_LockSessions : any,
 	_BroadcastingTimestamps : { any? },
 	_LocalBroadcastListeners : { any? },
+	_ValueBaseBindings : { any? },
 
 	_ExclusiveTimerCalled : boolean,
 	_ShutdownCalled : boolean,
@@ -316,6 +317,7 @@ export type __UDCInfo_Internal = {
 	_StandbyReady : boolean,
 	_RecordBroadcastCalled : boolean,
 	_BroadcastQueueRunning : boolean,
+	_ValueBindingRunning : boolean,
 
 	_CurrentLoadWorkers : number,
 	_CurrentSaveWorkers : number,
@@ -379,7 +381,7 @@ export type UDCRecord = {
 	IsArchived: boolean, -- If this record was detached and archived
 	Event: UDCEvent, -- Utils for the events
 	Validation: UDCValidation, -- Utils for the validation
-	Swap: UDCSwap, -- Utils for the swap
+	Utilities: UDCUtils, -- Utils for the other utilities
 	Broadcasting: UDCBroadcasting, -- Utils for the messaging
 	Version: number, -- Version of this data
 	Data: any?, -- Loaded Data that has been loaded, this is a clone from the actual data/cache, where this must be a read-only member
@@ -538,8 +540,13 @@ export type UDCValidation = {
 	-- Removing all clamps of validation
 }
 
-export type UDCSwap = {
-
+export type UDCUtils = {
+	CreateTransaction: (UDCUtils: UDCUtils, AnotherRecord: UDCRecord, TransactionFunction: (ThisPatch: UDCTransactionPatch, AnotherPatch: UDCTransactionPatch) -> ()) -> boolean,
+	-- Creating transaction between two records, where two records commited to force saving after transaction successful
+	
+	BindValue: (UDCUtils: UDCUtils, ThisData: string | number, ValueBase: ValueBase, DestroyedWhenZero: boolean?, Penetration: number?) -> UDCEventConnector,
+	-- Binding data to a ValueBase, where the value will be changed when the data changed
+	-- Where the ValueBase can be destroyed optionally, when the data is 0 or nil
 }
 
 export type UDCBroadcasting = {
@@ -566,12 +573,24 @@ export type UDCBroadcastingPacket = {
 
 export type UDCEventConnector = {
 	Wait: (self: UDCEventConnector) -> any,
+	IsConnected: (self: UDCEventConnector) -> boolean,
 	Disconnect: (self: UDCEventConnector) -> (),
 	DisconnectAfterCalled: (self: UDCEventConnector) -> (),
 }
 
 export type UDCListenerConnector = {
 	Disconnect: (self: UDCListenerConnector) -> (),
+}
+
+export type UDCTransactionPatch = {
+	Trade: (UDCTransactionPatch: UDCTransactionPatch, DataName: string | number, Value: any, Penetration: number?) -> (),
+	-- (ONE-SIDED) where current record gives a data within value to another record
+	
+	Swap: (UDCTransactionPatch: UDCTransactionPatch, DataName: string | number, Penetration: number?) -> (),
+	-- (TWO-SIDED) where both records swap their data with each other, for same data element
+	
+	Give: (UDCTransactionPatch: UDCTransactionPatch, DataName: string | number, Penetration: number?) -> (),
+	-- (ONE-SIDED) where current record gives all of its data to another record
 }
 
 export type UDCReadOnlyRecord = {
@@ -1443,6 +1462,8 @@ local function run_broadcast_queue(meta : __UDCInfo_Internal)
 	meta._BroadcastQueueRunning = true
 
 	RunService.Heartbeat:Connect(function() 
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end
+
 		while #meta._BroadcastPendingQueue > 0 and can_send_broadcast(meta) and meta.MessagingEnabled and not meta._ShutdownCalled do
 			local item = table.remove(meta._BroadcastPendingQueue, 1)
 			if not item then continue end
@@ -1471,6 +1492,45 @@ local function run_broadcast_queue(meta : __UDCInfo_Internal)
 				dispatch(meta, item.Record, "OnBroadcastSent")
 			else
 				throw(meta, item.Record, "Unable to broadcast packet, reason: " .. tostring(err))
+			end
+		end
+	end)
+end
+
+local function run_binding_queue(meta : __UDCInfo_Internal)
+	if meta._ValueBindingRunning or meta._ShutdownCalled then return end
+	meta._ValueBindingRunning = true
+	
+	RunService.Heartbeat:Connect(function() 
+		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end
+		
+		for key, dataBinding in pairs(meta._ValueBaseBindings) do
+			if typeof(dataBinding) ~= "table" then continue end
+			
+			local data = meta._DataCache[key] and meta._DataCache[key].__data
+			if not data then continue end
+			
+			for i, info in ipairs(dataBinding) do
+				if not info.ThisData or not info.ValueBase or not info.ValueBase:IsDescendantOf(game) or not info.ValueBase:IsA("ValueBase") then continue end
+				info.Penetration = info.Penetration or 1 
+				
+				local value = find_element(data, info.ThisData, info.Penetration)
+				if not value then continue end
+				
+				if info.ValueBase.Value == value then continue end
+				info.ValueBase.Value = value
+				
+				if info.DestroyedWhenZero == true and info.ValueBase.Value <= 0 then 
+					info.ValueBase:Destroy()
+				end
+				
+				if not info.__called then
+					info.__called = true
+				end
+				
+				if info.__deadsignal then 
+					table.remove(dataBinding, i)
+				end
 			end
 		end
 	end)
@@ -2228,6 +2288,101 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	return broadcasting
 end
 
+local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecord)
+	local utility = {}
+	
+	local function registerBinding(record : UDCRecord, thisData: string | number, penetration: number)
+		local methods = {}
+		
+		local valueBind = meta._ValueBaseBindings[record.Key]
+		local disconnected = false
+		
+		local index
+		for i, v in ipairs(valueBind) do
+			if v.ThisData == thisData and v.Penetration == penetration then
+				index = i
+				break
+			end
+		end
+		
+		function methods:Disconnect()
+			if not valueBind then return end
+			if disconnected then return end
+			if not index then return end
+			
+			table.remove(valueBind, index)
+			disconnected = true
+		end
+		
+		function methods:DisconnectAfterCalled()
+			if not valueBind then return end
+			if disconnected then return end
+			if not index then return end
+			
+			if valueBind.__deadsignal == nil then
+				valueBind.__deadsignal = true
+			end
+			
+			disconnected = true
+		end
+		
+		function methods:IsConnected()
+			return not disconnected and valueBind[index] ~= nil
+		end
+		
+		function methods:Wait()
+			local currentThread = coroutine.running()
+			if not valueBind then return end
+			
+			valueBind.__called = false
+			local thread = task.spawn(function()
+				while not valueBind.__called do
+					task.wait()
+				end
+				
+				task.spawn(currentThread, valueBind.__called)
+			end)
+			local result = coroutine.yield()
+			if thread then task.cancel(thread) end
+			
+			return result
+		end
+		
+		return methods
+	end
+	
+	function utility:CreateTransaction(AnotherRecord: UDCRecord, TransactionFunction: (ThisPatch: UDCTransactionPatch, AnotherPatch: UDCTransactionPatch) -> ())
+		
+	end
+	
+	function utility:BindValue(ThisData: string | number, ValueBase: ValueBase, DestroyedWhenZero: boolean?, Penetration: number?)
+		Penetration = Penetration or 1
+		DestroyedWhenZero = DestroyedWhenZero or false
+		
+		if typeof(ThisData) ~= "string" and typeof(ThisData) ~= "number" then
+			throw(meta, record, "Invalid data type for ThisData. Expected string or number, got " .. typeof(ThisData))
+			return nil
+		end
+		
+		if typeof(ValueBase) ~= "Instance" then
+			throw(meta, record, "Invalid data type for ValueBase. Expected Instance, got " .. typeof(ValueBase))
+			return nil
+		end
+		
+		local info = {
+			ThisData = ThisData,
+			ValueBase = ValueBase,
+			Penetration = Penetration,
+			DestroyedWhenZero = DestroyedWhenZero,
+		}
+		
+		table.insert(meta._ValueBaseBindings[record.Key], info)
+		return registerBinding(info)
+	end
+	
+	return utility
+end
+
 local function current_record(meta : __UDCInfo_Internal, key : number | string, owner : Player?)
 	if meta._ActiveRecords[key] then
 		return meta._ActiveRecords[key]
@@ -2242,7 +2397,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.IsArchived = false -- This is to indicate if the record is archived or not
 	record.Event = create_event_class(meta, record) -- Utils of events for this record
 	record.Validation = create_validation_class(meta, record) -- Utils to create validation for this record
-	record.Swap = nil -- (COMING SOON!) Utils to swap data with other record
+	record.Utilities = create_utility_class(meta, record) -- (COMING SOON!) Utils to create utilities for this record
 	record.Broadcasting = create_broadcasting_class(meta, record, recordBroadcastSuffix, globalBroadcastSuffix) -- Utils to Broadcasting to other servers
 	record.Version = 0 -- This is the version of the data, it will be increased when the data is saved
 	record.Data = nil -- This is the data of the record
@@ -3575,6 +3730,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._LockSessions = ScopedMutex.new(Mutex)
 	self._BroadcastingTimestamps = {} -- { [Key: string] = timestamp: number }
 	self._LocalBroadcastListeners = {} -- { [Key: string] = { [ListenerId: string] = Listener: function } }
+	self._ValueBaseBindings = {} -- { [Key: string] = { ThisData: string | number, ValueBase: Instance | ValueBase, Penetration: number, DestroyedWhenZero: boolean } } 
 
 	self._ShutdownCalled = false
 	self._ExclusiveSafetyCalled = false
@@ -3586,6 +3742,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._AutosaveCalled = false
 	self._RecordBroadcastCalled = false
 	self._BroadcastQueueRunning = false
+	self._ValueBindingRunning = false
 
 	self._CurrentLoadWorkers = 0
 	self._CurrentSaveWorkers = 0
