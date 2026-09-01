@@ -583,14 +583,20 @@ export type UDCListenerConnector = {
 }
 
 export type UDCTransactionPatch = {
-	Trade: (UDCTransactionPatch: UDCTransactionPatch, DataName: string | number, Value: any, Penetration: number?) -> (),
+	Trade: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Value: number, Penetration: number?) -> (),
 	-- (ONE-SIDED) where current record gives a data within value to another record
+	-- This only works when the data is number-ed type
 	
-	Swap: (UDCTransactionPatch: UDCTransactionPatch, DataName: string | number, Penetration: number?) -> (),
+	Swap: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Penetration: number?) -> (),
 	-- (TWO-SIDED) where both records swap their data with each other, for same data element
+	-- Only works when the same data were also having same data type
 	
-	Give: (UDCTransactionPatch: UDCTransactionPatch, DataName: string | number, Penetration: number?) -> (),
+	Give: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Penetration: number?) -> (),
 	-- (ONE-SIDED) where current record gives all of its data to another record
+	-- But in condition, if the data was number-ed type, you can give the whole number of data to the victim
+	
+	-- If the data was not number-ed type, the data from this record will be nil and the victim will get the data
+	-- Unless if the victim was having the data already, the data will not be given
 }
 
 export type UDCReadOnlyRecord = {
@@ -2060,6 +2066,245 @@ local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal, record
 	end
 end
 
+local function create_transaction_data_subclass(meta : __UDCInfo_Internal, record : UDCRecord, againstRecord : UDCRecord, key : string)
+	local methods = {}
+	
+	local function get_record_data(record : UDCRecord)
+		local data = meta._DataCache[record.Key] and meta._DataCache[record.Key].__data
+		if not data then
+			throw(meta, record, "Data is not loaded.")
+			return nil
+		end
+		
+		local isRecordActive = meta._ActiveRecords and meta._ActiveRecords[record.Key] ~= nil
+		if not isRecordActive then
+			throw(meta, record, "Record is not active.")
+			return nil
+		end
+		
+		return data
+	end
+	
+	function methods:Trade(ThisData: string | number, Value: number, Penetration: number?)
+		Penetration = Penetration or 1
+		
+		local thisData = get_record_data(record)
+		if not thisData then 
+			throw(meta, record, "This record is not loaded.")
+			return 
+		end
+		
+		local otherData = get_record_data(againstRecord)
+		if not otherData then 
+			throw(meta, record, "Victim's record is not loaded.")
+			return 
+		end
+		
+		local currentValue = find_element(thisData, thisData, Penetration)
+		if not currentValue then
+			throw(meta, record, "From this record, there is no exact element to trade.")
+			return 
+		end
+		
+		if typeof(currentValue) ~= "number" then
+			throw(meta, record, "To use trading transaction, the element to Trade should be a number.")
+			return 
+		end
+		
+		local otherCurrentValue = find_element(otherData, ThisData, Penetration)
+		if otherCurrentValue and typeof(otherCurrentValue) ~= "number" then
+			throw(meta, record, "To use trading transaction, the element to receive should be a number.")
+			return 
+		else
+			otherCurrentValue = 0
+		end
+		
+		Value = math.clamp(Value, 0, currentValue)
+		
+		local attempts = 0
+		repeat
+			local successToTrade = change_element(otherData, ThisData, otherCurrentValue + Value, Penetration)
+			
+			if not successToTrade then
+				throw(meta, record, "Failed when trying to trade the data from this record to other record.")
+				attempts += 1
+				
+				task.wait(0.1)
+			end
+		until successToTrade or attempts > 100
+		
+		if attempts >= 100 then
+			throw(meta, record, "Failed when trying to trade the data from this record to other record. Aborted.")
+			return 
+		end
+		
+		attempts = 0
+		repeat
+			local successToDecrease = change_element(thisData, thisData, currentValue - Value, Penetration)
+			
+			if not successToDecrease then
+				throw(meta, record, "Failed when trying to decrease the data from this record.")
+				attempts += 1
+				
+				task.wait(0.1)
+			end
+		until successToDecrease or attempts > 100
+		
+		if attempts >= 100 then
+			throw(meta, record, "Failed when trying to decrease the data from this record. Aborted.")
+			return 
+		end
+	end
+	
+	function methods:Swap(ThisData: string | number, Penetration: number?)
+		Penetration = Penetration or 1
+		
+		local thisData = get_record_data(record)
+		if not thisData then 
+			throw(meta, record, "This record is not loaded.")
+			return 
+		end
+		
+		local otherData = get_record_data(againstRecord)
+		if not otherData then 
+			throw(meta, record, "Victim's record is not loaded.")
+			return 
+		end
+		
+		local thisCurrentValue = find_element(thisData, ThisData, Penetration)
+		if not thisCurrentValue then 
+			throw(meta, record, "There is no exact data from this record.")
+			return 
+		end
+		
+		local otherCurrentValue = find_element(otherData, ThisData, Penetration)
+		if not otherCurrentValue then 
+			throw(meta, record, "There is no exact data from victim's record.")
+			return 
+		end
+		
+		-- comparing if the exact data of two records is the same, if not, it will be considered as different data and aborted
+		if typeof(thisCurrentValue) ~= typeof(otherCurrentValue) then
+			throw(meta, record, "The data type from this record and victim's record is not the same.")
+			return 
+		end
+		
+		local attempts = 0
+		repeat
+			local successForThisSwap = change_element(thisData, ThisData, otherCurrentValue, Penetration)
+			
+			if not successForThisSwap then
+				throw(meta, record, "Failed when trying to swap the data from this record to other record.")
+				attempts += 1
+				
+				task.wait(0.1)
+			end
+		until successForThisSwap or attempts > 100
+		
+		if attempts >= 100 then
+			throw(meta, record, "Failed when trying to swap the data from this record to other record. Aborted.")
+			return 
+		end
+		
+		attempts = 0
+		repeat
+			local successForOtherSwap = change_element(otherData, ThisData, thisCurrentValue, Penetration)
+			
+			if not successForOtherSwap then
+				throw(meta, record, "Failed when trying to swap the data from victim's record to this record.")
+				attempts += 1
+				
+				task.wait(0.1)
+			end
+		until successForOtherSwap or attempts > 100
+		
+		if attempts >= 100 then
+			throw(meta, record, "Failed when trying to swap the data from victim's record to this record. Aborted.")
+			return 
+		end
+	end
+	
+	function methods:Give(ThisData: string | number, Penetration: number?)
+		Penetration = Penetration or 1
+		
+		local thisData = get_record_data(record)
+		if not thisData then 
+			throw(meta, record, "This record is not loaded.")
+			return 
+		end
+		
+		local otherData = get_record_data(againstRecord)
+		if not otherData then 
+			throw(meta, record, "Victim's record is not loaded.")
+			return 
+		end
+		
+		local thisCurrentValue = find_element(thisData, ThisData, Penetration)
+		if not thisCurrentValue then 
+			throw(meta, record, "There is no exact data from this record.")
+			return 
+		end
+		
+		-- number for giving, table for merging, and another else just checks if the data was already available or not
+		-- if not, give, if its available, then set it
+		if typeof(thisCurrentValue) == "number" then
+			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
+			if otherCurrentValue and typeof(otherCurrentValue) ~= "number" then
+				throw(meta, record, "The data type of this record and victim's record is different.")
+				return 
+			else
+				otherCurrentValue = 0
+			end
+			
+			local attempts = 0
+			repeat
+				local successGivingToVictim = change_element(otherData, ThisData, thisCurrentValue + thisCurrentValue, Penetration)
+				
+				if not successGivingToVictim then
+					throw(meta, record, "Failed when trying to give the data to victim's record.")
+					attempts += 1
+					
+					task.wait(0.1)
+				end
+			until successGivingToVictim or attempts > 100
+			
+			if attempts >= 100 then
+				throw(meta, record, "Failed when trying to give the data to victim's record. Aborted.")
+				return 
+			end
+			
+			attempts = 0
+			repeat
+				local successGivingToThis = change_element(thisData, ThisData, 0, Penetration)
+				
+				if not successGivingToThis then
+					throw(meta, record, "Failed when trying to end up the data in this record.")
+					attempts += 1
+					
+					task.wait(0.1)
+				end
+			until successGivingToThis or attempts > 100
+			
+			if attempts >= 100 then
+				throw(meta, record, "Failed when trying to end up the data in this record. Aborted.")
+				return 
+			end
+		elseif typeof(thisCurrentValue) == "table" then
+			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
+			if otherCurrentValue and typeof(otherCurrentValue) ~= "table" then
+				throw(meta, record, "The data type of this record and victim's record is different.")
+				return 
+			end
+			
+			
+		else
+			
+		end
+	end
+	
+	return methods
+end
+
 local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDCRecord, recordBroadcastSuffix: string, globalBroadcastSuffix: string)
 	local broadcasting = {}
 
@@ -2348,6 +2593,43 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 	end
 	
 	function utility:CreateTransaction(AnotherRecord: UDCRecord, TransactionFunction: (ThisPatch: UDCTransactionPatch, AnotherPatch: UDCTransactionPatch) -> ())
+		if not meta.SwappingEnabled then
+			throw(meta, record, "Swapping is disabled.")
+			return false
+		end
+		
+		if not AnotherRecord or typeof(AnotherRecord) ~= "table" then
+			throw(meta, record, "Another record is invalid!")
+			return false
+		end
+		
+		local thisKey = record.Key
+		local anotherKey = AnotherRecord.Key
+		
+		if not meta._ActiveRecords[thisKey] then
+			throw(meta, record, "This record is not active.")
+			return false
+		end
+		
+		if not meta._ActiveRecords[anotherKey] then
+			throw(meta, record, "Another record is not active.")
+			return false
+		end
+		
+		local thisCache = meta._DataCache[thisKey]
+		local anotherCache = meta._DataCache[anotherKey]
+		if not thisCache or not anotherCache then
+			throw(meta, record, "One of the record (potentially both) isn't loaded or ready yet.")
+			return false
+		end
+		
+		local thisData = thisCache.__data
+		local anotherData = anotherCache.__data
+		
+		if not thisData or not anotherData then
+			throw(meta, record, "One of the record (potentially both) doesn't have data in the cache.")
+			return false
+		end
 		
 	end
 	
