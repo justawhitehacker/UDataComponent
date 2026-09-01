@@ -1510,6 +1510,8 @@ local function run_binding_queue(meta : __UDCInfo_Internal)
 			local data = meta._DataCache[key] and meta._DataCache[key].__data
 			if not data then continue end
 			
+			local toRemove = {}
+			
 			for i, info in ipairs(dataBinding) do
 				if not info.ThisData or not info.ValueBase or not info.ValueBase:IsDescendantOf(game) or not info.ValueBase:IsA("ValueBase") then continue end
 				info.Penetration = info.Penetration or 1 
@@ -1518,19 +1520,26 @@ local function run_binding_queue(meta : __UDCInfo_Internal)
 				if not value then continue end
 				
 				if info.ValueBase.Value == value then continue end
-				info.ValueBase.Value = value
+				pcall(function()
+					info.ValueBase.Value = value
+				end)
 				
 				if info.DestroyedWhenZero == true and info.ValueBase.Value <= 0 then 
 					info.ValueBase:Destroy()
 				end
-				
-				if not info.__called then
-					info.__called = true
+
+				if info.__waiter then
+					task.spawn(info.__waiter, info.ValueBase.Value)
+					info.__waiter = nil
 				end
 				
 				if info.__deadsignal then 
-					table.remove(dataBinding, i)
+					toRemove[i] = true
 				end
+			end
+
+			for i in pairs(toRemove) do
+				table.remove(dataBinding, i)
 			end
 		end
 	end)
@@ -2291,23 +2300,26 @@ end
 local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecord)
 	local utility = {}
 	
-	local function registerBinding(record : UDCRecord, thisData: string | number, penetration: number)
+	local function registerBinding(record : UDCRecord, info : any)
 		local methods = {}
 		
 		local valueBind = meta._ValueBaseBindings[record.Key]
 		local disconnected = false
 		
-		local index
-		for i, v in ipairs(valueBind) do
-			if v.ThisData == thisData and v.Penetration == penetration then
-				index = i
-				break
+		local function getIndex()
+			for i, v in ipairs(valueBind) do
+				if v == info then
+					return i	
+				end
 			end
+			
+			return nil
 		end
 		
 		function methods:Disconnect()
-			if not valueBind then return end
 			if disconnected then return end
+			
+			local index = getIndex()
 			if not index then return end
 			
 			table.remove(valueBind, index)
@@ -2315,37 +2327,21 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		end
 		
 		function methods:DisconnectAfterCalled()
-			if not valueBind then return end
 			if disconnected then return end
-			if not index then return end
 			
-			if valueBind.__deadsignal == nil then
-				valueBind.__deadsignal = true
-			end
-			
+			info.__deadsignal = true
 			disconnected = true
 		end
 		
 		function methods:IsConnected()
-			return not disconnected and valueBind[index] ~= nil
+			return not disconnected and getIndex() ~= nil
 		end
 		
 		function methods:Wait()
 			local currentThread = coroutine.running()
-			if not valueBind then return end
+			info.__waiter = currentThread
 			
-			valueBind.__called = false
-			local thread = task.spawn(function()
-				while not valueBind.__called do
-					task.wait()
-				end
-				
-				task.spawn(currentThread, valueBind.__called)
-			end)
-			local result = coroutine.yield()
-			if thread then task.cancel(thread) end
-			
-			return result
+			return coroutine.yield()
 		end
 		
 		return methods
@@ -2368,6 +2364,7 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			throw(meta, record, "Invalid data type for ValueBase. Expected Instance, got " .. typeof(ValueBase))
 			return nil
 		end
+		run_binding_queue(meta)
 		
 		local info = {
 			ThisData = ThisData,
@@ -2376,8 +2373,12 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			DestroyedWhenZero = DestroyedWhenZero,
 		}
 		
+		if not meta._ValueBaseBindings[record.Key] then
+			meta._ValueBaseBindings[record.Key] = {}
+		end
+		
 		table.insert(meta._ValueBaseBindings[record.Key], info)
-		return registerBinding(info)
+		return registerBinding(record, info)
 	end
 	
 	return utility
