@@ -2785,6 +2785,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 			meta._AutosaveTimestamp[record.Key] = nil
 			meta._CompressionStack[record.Key] = nil
 			meta._LocalBroadcastListeners[record.Key] = nil
+			meta._ValueBaseBindings[record.Key] = nil
 			meta._DirtySave[record.Key] = nil
 
 			meta._TrackedClamps[record.Key] = nil
@@ -3465,6 +3466,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		meta._AutosaveTimestamp[record.Key] = nil
 		meta._CompressionStack[record.Key] = nil
 		meta._LocalBroadcastListeners[record.Key] = nil
+		meta._ValueBaseBindings[record.Key] = nil
 		meta._DirtySave[record.Key] = nil
 
 		meta._TrackedClamps[record.Key] = nil
