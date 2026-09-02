@@ -224,7 +224,7 @@ export type UDCInfo = {
 	GetLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
 	-- This is where the record of local data is obtained
 	-- You can say, in UDC, local data is just "global data of this data store" or "global record"
-	ViewLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
+	ViewLocalRecord: (UDCInfo: UDCInfo, Version: string?) -> UDCRecord,
 	-- This is where you can view the record of local data
 
 	-- Configurations
@@ -4652,7 +4652,7 @@ function UDataComponent:GetCurrentRecord(Key: number | string, OwnerOfThisData: 
 	return current_record(self, Key, OwnerOfThisData) :: UDCRecord
 end
 
-function UDataComponent:ViewCurrentRecord(Key: number | string, Version: string?) : UDCRecord
+function UDataComponent:ViewCurrentRecord(Key: number | string, Version: string?) : UDCReadOnlyRecord
 	if typeof(Key) == "string" and #Key > self.MaxKeyLength then
 		warn(string.format("[%s] : Key is too long", self.ErrorReasonNamespace))
 		Key = string.sub(Key, 1, tonumber(self.MaxKeyLength))
@@ -4689,5 +4689,37 @@ function UDataComponent:GetLocalRecord() : UDCRecord
 
 	return current_record(self, locKey, nil) :: UDCRecord
 end
+
+function UDataComponent:ViewLocalRecord(Version: string?) : UDCReadOnlyRecord
+	local Name = self.LocalDataNamespace .. "@" .. self._DataStoreName
+	local Result
+	if Version then
+		local success, result = pcall(function()
+			return self._CurrentDataStore:GetVersionAsync(Name, Version)
+		end)
+		
+		if success and result then Result = result else return nil end
+	else
+		local success, result = pcall(function()
+			return self._CurrentDataStore:GetAsync(Name)
+		end)
+		
+		if success and result then Result = result else return nil end
+	end
+	
+	local success, decompressed = pcall(Compressor.TryToDecompress, Result and Result.__data, Result and Result.__flag)
+	
+	if not success then
+		return nil
+	end
+	
+	return deepfreeze({ Version = Result and Result.__version or 0, Owner = nil, Data = decompressed })
+end
+
+-- Have a complain? DM me in IG: @raihanaufal_77
+-- reply takes time, i'm not too active at social media, but i'll reply your message ASAP
+
+-- punya suatu komplain? balas ke DM saya di IG: @raihanaufal_77
+-- balasan mungkin perlu waktu, saya tidak terlalu aktif di media sosial, tapi saya akan balas pesan anda secepatnya
 
 return UDataComponent :: UDataComponent
