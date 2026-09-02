@@ -2116,7 +2116,7 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 		return cloned
 	end
 	
-	function methods:Trade(ThisData: string | number, Value: number, Penetration: number?)
+	function methods:TradeToDestination(ThisData: string | number, Value: number, Penetration: number?)
 		Penetration = Penetration or 1
 		
 		local thisData = get_record_data()
@@ -2181,6 +2181,76 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			throw(meta, record, "Failed when trying to decrease the data from this record.")
 			throw(meta, againstRecord, "Failed when trying to receive the data from other record to this record.")
 			
+			error("Failed when trying to decrease the data from this record")
+			return
+		end
+	end
+	
+	function methods:TradeToSource(ThisData: string | number, Value: number, Penetration: number?)
+		Penetration = Penetration or 1
+
+		local thisData = get_against_record_data()
+		if not thisData then 
+			throw(meta, againstRecord, "This record is not loaded.")
+			throw(meta, record, "The record target doesn't have its data loaded.")
+
+			error("Current record haven't loaded its data")
+			return 
+		end
+
+		local otherData = get_record_data()
+		if not otherData then 
+			throw(meta, againstRecord, "The record target doesn't have its data loaded.")
+			throw(meta, record, "This record is not loaded.")
+
+			error("Record's target haven't loaded its data")
+			return 
+		end
+
+		local currentValue = find_element(thisData, ThisData, Penetration)
+		if not currentValue then
+			throw(meta, againstRecord, "From this record, there is no exact element to trade.")
+			throw(meta, record, "From other record, there is no exact element to receive.")
+
+			error("This record doesn't have an exact element to trade")
+			return 
+		end
+
+		if typeof(currentValue) ~= "number" then
+			throw(meta, againstRecord, "To use trading transaction, the element to Trade should be a number.")
+			throw(meta, record, "The data from record's target should be a number.")
+
+			error("The element to trade should be a number")
+			return 
+		end
+
+		local otherCurrentValue = find_element(otherData, ThisData, Penetration)
+		if typeof(otherCurrentValue) ~= "number" then
+			throw(meta, againstRecord, "The data from record's target should be a number.")
+			throw(meta, record, "To use trading transaction, the element to Trade should be a number.")
+
+			error("The element is existed from record's target, but not a number-ed type.")
+			return 
+		elseif not otherCurrentValue then
+			otherCurrentValue = 0
+		end
+
+		Value = math.clamp(Value, 0, currentValue)
+
+		local successToTrade = change_element(otherData, ThisData, otherCurrentValue + Value, Penetration)
+		if not successToTrade then
+			throw(meta, againstRecord, "Failed when trying to trade the data from this record to other record.")
+			throw(meta, record, "Failed when trying to receive the data from other record to this record.")
+
+			error("Failed when trying to trade the data from this record to other record")
+			return
+		end
+
+		local successToDecrease = change_element(thisData, ThisData, currentValue - Value, Penetration)
+		if not successToDecrease then
+			throw(meta, againstRecord, "Failed when trying to decrease the data from this record.")
+			throw(meta, record, "Failed when trying to receive the data from other record to this record.")
+
 			error("Failed when trying to decrease the data from this record")
 			return
 		end
@@ -2253,7 +2323,7 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 		end
 	end
 	
-	function methods:Give(ThisData: string | number, Penetration: number?)
+	function methods:GiveToDestination(ThisData: string | number, Penetration: number?)
 		Penetration = Penetration or 1
 		
 		local thisData = get_record_data()
@@ -2363,6 +2433,122 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				throw(meta, record, "Failed when trying to end up the data in this record.")
 				throw(meta, againstRecord, "Failed when trying to end up the data in other record.")
 				
+				error("Failed when trying to end up the data in this record")
+				return
+			end
+		end
+	end
+	
+	function methods:GiveToSource(ThisData: string | number, Penetration: number?)
+		Penetration = Penetration or 1
+
+		local thisData = get_against_record_data()
+		if not thisData then 
+			throw(meta, againstRecord, "This record is not loaded.")
+			throw(meta, record, "The record target doesn't have its data loaded.")
+
+			error("Current record haven't loaded its data")
+			return 
+		end
+
+		local otherData = get_record_data()
+		if not otherData then 
+			throw(meta, againstRecord, "The record target doesn't have its data loaded.")
+			throw(meta, record, "This record is not loaded.")
+
+			error("Record's target haven't loaded its data")
+			return 
+		end
+
+		local thisCurrentValue = find_element(thisData, ThisData, Penetration)
+		if not thisCurrentValue then 
+			throw(meta, againstRecord, "From this record, there is no exact element to trade.")
+			throw(meta, record, "From other record, there is no exact element to receive.")
+
+			error("This record doesn't have an exact element to trade")
+			return 
+		end
+
+		-- number for giving, table for merging, and another else just checks if the data was already available or not
+		-- if not, give, if its available, then set it
+		if typeof(thisCurrentValue) == "number" then
+			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
+			if typeof(otherCurrentValue) ~= "number" then
+				throw(meta, againstRecord, "The data type of this record and victim's record is different.")
+				throw(meta, record, "This record have the element, but not a number.")
+
+				error("The data type of this record and victim's record is different")
+				return 
+			elseif not otherCurrentValue then
+				otherCurrentValue = 0
+			end
+
+			local successGivingToVictim = change_element(otherData, ThisData, otherCurrentValue + thisCurrentValue, Penetration)
+			if not successGivingToVictim then
+				throw(meta, againstRecord, "Failed when trying to give the data from this record to other record.")
+				throw(meta, record, "Failed when trying to receive the data from other record to this record.")
+
+				error("Failed when trying to swap the data from this record to other record")
+				return
+			end
+
+			local successGivingToThis = change_element(thisData, ThisData, 0, Penetration)
+			if not successGivingToThis then
+				throw(meta, againstRecord, "Failed when trying to give the data from victim's record to this record.")
+				throw(meta, record, "Failed when trying to receive the data from other record to this record.")
+
+				error("Failed when trying to swap the data from victim's record to this record")
+				return
+			end
+		elseif typeof(thisCurrentValue) == "table" then
+			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
+			if otherCurrentValue and typeof(otherCurrentValue) ~= "table" then
+				throw(meta, againstRecord, "The data type of this record and victim's record is different.")
+				throw(meta, record, "The data type of this record and victim's record is different.")
+
+				error("The data type of this record and victim's record is different")
+				return 
+			end
+
+			local function transfer_data(source : {any?}, destination : {any?}) -- similiar to reconciliation with addition
+				for name, value in pairs(source) do
+					if destination[name] == nil then
+						destination[name] = value
+						source[name] = nil
+					elseif typeof(value) == "number" and typeof(destination[name]) == "number" then
+						destination[name] += value
+						source[name] = nil
+					elseif typeof(value) == "table" and typeof(destination[name]) == "table" then
+						transfer_data(value, destination[name])
+					end
+				end
+			end
+
+			pcall(transfer_data, thisCurrentValue, otherCurrentValue)
+		else
+			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
+			if otherCurrentValue then
+				throw(meta, againstRecord, "The victim's record already have this data.")
+				throw(meta, record, "This record already have this data.")
+
+				error("The victim's record already have this data")
+				return 
+			end
+
+			local successGivingToOther = change_element(otherData, ThisData, thisCurrentValue, Penetration)
+			if not successGivingToOther then
+				throw(meta, againstRecord, "Failed when trying to give whole data from this record to the victim's record.")
+				throw(meta, record, "Failed when trying to receive the data from other record to this record.")
+
+				error("Failed when trying to give the data from this record to the victim's record")
+				return
+			end
+
+			local succesEndingThis = change_element(thisData, ThisData, nil, Penetration)
+			if not succesEndingThis then
+				throw(meta, againstRecord, "Failed when trying to end up the data in this record.")
+				throw(meta, record, "Failed when trying to end up the data in other record.")
+
 				error("Failed when trying to end up the data in this record")
 				return
 			end
