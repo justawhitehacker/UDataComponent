@@ -2094,11 +2094,11 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 		end
 		
 		if editors.Source then
-			return methods.Source
+			return editors.Source
 		end
 		
 		local cloned = deepclone(data)
-		methods.Source = cloned
+		editors.Source = cloned
 		
 		return cloned
 	end
@@ -2114,12 +2114,12 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			return nil
 		end
 		
-		if methods.Destination then
-			return methods.Destination
+		if editors.Destination then
+			return editors.Destination
 		end
 		
 		local cloned = deepclone(data)
-		methods.Destination = cloned
+		editors.Destination = cloned
 		
 		return cloned
 	end
@@ -2424,7 +2424,15 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				end
 			end
 				
-			pcall(transfer_data, thisCurrentValue, otherCurrentValue)
+			local success, err = pcall(transfer_data, thisCurrentValue, otherCurrentValue)
+			
+			if not success then
+				throw(meta, record, "Failed when trying to give the data from this record to other record. Reason: " .. tostring(err))
+				throw(meta, againstRecord, "Failed when trying to receive the data from other record to this record. Reason: " .. tostring(err))
+				
+				error("Failed when trying to transfer the data from this record to other record. Reason: " .. tostring(err))
+				return
+			end
 		else
 			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
 			if otherCurrentValue then
@@ -2548,7 +2556,15 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				end
 			end
 
-			pcall(transfer_data, thisCurrentValue, otherCurrentValue)
+			local success, err = pcall(transfer_data, thisCurrentValue, otherCurrentValue)
+
+			if not success then
+				throw(meta, record, "Failed when trying to give the data from this record to other record. Reason: " .. tostring(err))
+				throw(meta, againstRecord, "Failed when trying to receive the data from other record to this record. Reason: " .. tostring(err))
+
+				error("Failed when trying to transfer the data from this record to other record. Reason: " .. tostring(err))
+				return
+			end
 		else
 			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
 			if otherCurrentValue then
@@ -2907,6 +2923,11 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			return false
 		end
 		
+		if record._Meta ~= AnotherRecord._Meta then
+			throw(meta, record, "Another record is not from the same UDataComponent info.")
+			return false
+		end
+		
 		local thisCache = meta._DataCache[thisKey]
 		local anotherCache = meta._DataCache[anotherKey]
 		if not thisCache or not anotherCache then
@@ -2923,12 +2944,17 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		end
 		record._TransactionProgress = true
 		
-		local thisLockSuccess = meta._LockSessions:Acquire(thisKey)
-		local anotherLockSuccess = meta._LockSessions:Acquire(anotherKey)
+		local firstKey, secondKey = thisKey, anotherKey
+		if tostring(firstKey) < tostring(secondKey) then
+			firstKey, secondKey = secondKey, firstKey
+		end
+		
+		local thisLockSuccess = meta._LockSessions:Acquire(firstKey)
+		local anotherLockSuccess = meta._LockSessions:Acquire(secondKey)
 		
 		if not thisLockSuccess or not anotherLockSuccess then
-			if thisLockSuccess then meta._LockSessions:Release(thisKey) end
-			if anotherLockSuccess then meta._LockSessions:Release(anotherKey) end
+			if thisLockSuccess then meta._LockSessions:Release(firstKey) end
+			if anotherLockSuccess then meta._LockSessions:Release(secondKey) end
 			record._TransactionProgress = false
 			
 			throw(meta, record, "Failed to acquire lock for one of the records (potentially both).")
@@ -2944,8 +2970,8 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		local success, err = pcall(TransactionFunction, patcherSubclass)
 		
 		if not success then
-			meta._LockSessions:Release(thisKey)
-			meta._LockSessions:Release(anotherKey)
+			meta._LockSessions:Release(firstKey)
+			meta._LockSessions:Release(secondKey)
 			record._TransactionProgress = false
 			
 			throw(meta, record, "Transaction function failed: " .. tostring(err))
@@ -2954,8 +2980,8 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		end
 		
 		if not patcherEditors.Source or not patcherEditors.Destination then
-			meta._LockSessions:Release(thisKey)
-			meta._LockSessions:Release(anotherKey)
+			meta._LockSessions:Release(firstKey)
+			meta._LockSessions:Release(secondKey)
 			record._TransactionProgress = false
 			
 			throw(meta, record, "Transaction function didn't return transaction patches for both records.")
@@ -2973,8 +2999,8 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			
 			local thisSuccess, thisErr = pcall(record.ForceSave, record, patcherEditors.Source)
 			if not thisSuccess then
-				meta._LockSessions:Release(thisKey)
-				meta._LockSessions:Release(anotherKey)
+				meta._LockSessions:Release(firstKey)
+				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
 				
 				throw(meta, record, "Failed to save source record: " .. tostring(thisErr))
@@ -2983,19 +3009,23 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			
 			local anotherSuccess, anotherErr = pcall(AnotherRecord.ForceSave, AnotherRecord, patcherEditors.Destination)
 			if not anotherSuccess then
-				meta._LockSessions:Release(thisKey)
-				meta._LockSessions:Release(anotherKey)
+				meta._LockSessions:Release(firstKey)
+				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
 				
 				throw(meta, AnotherRecord, "Failed to save destination record: " .. tostring(anotherErr))
 				return false
 			end
 			
+			if thisSuccess and anotherSuccess then
+				break
+			end
+			
 			task.wait()
 		end
 		
-		meta._LockSessions:Release(thisKey)
-		meta._LockSessions:Release(anotherKey)
+		meta._LockSessions:Release(firstKey)
+		meta._LockSessions:Release(secondKey)
 		record._TransactionProgress = false
 		
 		return true
@@ -3053,6 +3083,8 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	record.Version = 0 -- This is the version of the data, it will be increased when the data is saved
 	record.Data = nil -- This is the data of the record
 	record.CurrentState = "Asleep"
+	
+	record._Meta = meta -- This is the meta of the module, used for internal purposes
 
 	record._AwakeProgress = false -- This is to indicate if the record's awake in progress
 	record._ReadyProgress = false -- This is to indicate if the record's ready in progress
