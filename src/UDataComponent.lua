@@ -4695,13 +4695,13 @@ function UDataComponent:ViewCurrentRecord(Key: number | string, Version: string?
 end
 
 function UDataComponent:GetLocalRecord() : UDCRecord
-	local locKey = self.LocalDataNamespace .. "@" .. self._DataStoreName
+	local locKey = self.LocalDataNamespace .. "@" .. self.Name
 
 	return current_record(self, locKey, nil) :: UDCRecord
 end
 
 function UDataComponent:ViewLocalRecord(Version: string?) : UDCReadOnlyRecord
-	local Name = self.LocalDataNamespace .. "@" .. self._DataStoreName
+	local Name = self.LocalDataNamespace .. "@" .. self.Name
 	local Result
 	if Version then
 		local success, result = pcall(function()
