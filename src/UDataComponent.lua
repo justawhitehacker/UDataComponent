@@ -2069,38 +2069,67 @@ end
 local function create_transaction_data_subclass(meta : __UDCInfo_Internal, record : UDCRecord, againstRecord : UDCRecord, key : string)
 	local methods = {}
 	
-	local function get_record_data(record : UDCRecord)
+	methods.__clonedThisRecord = nil
+	methods.__clonedAgainstRecord = nil
+	
+	local function get_record_data()
 		local data = meta._DataCache[record.Key] and meta._DataCache[record.Key].__data
 		if not data then
-			throw(meta, record, "Data is not loaded.")
 			return nil
 		end
 		
 		local isRecordActive = meta._ActiveRecords and meta._ActiveRecords[record.Key] ~= nil
 		if not isRecordActive then
-			throw(meta, record, "Record is not active.")
 			return nil
 		end
 		
-		return data
+		if methods.__clonedThisRecord then
+			return methods.__clonedThisRecord
+		end
+		
+		local cloned = deepclone(data)
+		methods.__clonedThisRecord = cloned
+		
+		return cloned
+	end
+	
+	local function get_against_record_data()
+		local data = meta._DataCache[againstRecord.Key] and meta._DataCache[againstRecord.Key].__data
+		if not data then
+			return nil
+		end
+		
+		local isRecordActive = meta._ActiveRecords and meta._ActiveRecords[againstRecord.Key] ~= nil
+		if not isRecordActive then
+			return nil
+		end
+		
+		if methods.__clonedAgainstRecord then
+			return methods.__clonedAgainstRecord
+		end
+		
+		local cloned = deepclone(data)
+		methods.__clonedAgainstRecord = cloned
+		
+		return cloned
 	end
 	
 	function methods:Trade(ThisData: string | number, Value: number, Penetration: number?)
 		Penetration = Penetration or 1
 		
-		local thisData = get_record_data(record)
+		local thisData = get_record_data()
 		if not thisData then 
 			throw(meta, record, "This record is not loaded.")
 			return 
 		end
 		
-		local otherData = get_record_data(againstRecord)
+		local otherData = get_against_record_data()
 		if not otherData then 
 			throw(meta, record, "Victim's record is not loaded.")
 			return 
 		end
 		
-		local currentValue = find_element(thisData, thisData, Penetration)
+		local currentValue = find_element(thisData, ThisData, Penetration)
 		if not currentValue then
 			throw(meta, record, "From this record, there is no exact element to trade.")
 			return 
@@ -2140,7 +2169,7 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 		
 		attempts = 0
 		repeat
-			local successToDecrease = change_element(thisData, thisData, currentValue - Value, Penetration)
+			local successToDecrease = change_element(thisData, ThisData, currentValue - Value, Penetration)
 			
 			if not successToDecrease then
 				throw(meta, record, "Failed when trying to decrease the data from this record.")
@@ -2159,13 +2188,13 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 	function methods:Swap(ThisData: string | number, Penetration: number?)
 		Penetration = Penetration or 1
 		
-		local thisData = get_record_data(record)
+		local thisData = get_record_data()
 		if not thisData then 
 			throw(meta, record, "This record is not loaded.")
 			return 
 		end
 		
-		local otherData = get_record_data(againstRecord)
+		local otherData = get_against_record_data()
 		if not otherData then 
 			throw(meta, record, "Victim's record is not loaded.")
 			return 
@@ -2227,13 +2256,13 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 	function methods:Give(ThisData: string | number, Penetration: number?)
 		Penetration = Penetration or 1
 		
-		local thisData = get_record_data(record)
+		local thisData = get_record_data()
 		if not thisData then 
 			throw(meta, record, "This record is not loaded.")
 			return 
 		end
 		
-		local otherData = get_record_data(againstRecord)
+		local otherData = get_against_record_data()
 		if not otherData then 
 			throw(meta, record, "Victim's record is not loaded.")
 			return 
@@ -2258,7 +2287,7 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			
 			local attempts = 0
 			repeat
-				local successGivingToVictim = change_element(otherData, ThisData, thisCurrentValue + thisCurrentValue, Penetration)
+				local successGivingToVictim = change_element(otherData, ThisData, otherCurrentValue + thisCurrentValue, Penetration)
 				
 				if not successGivingToVictim then
 					throw(meta, record, "Failed when trying to give the data to victim's record.")
@@ -2296,9 +2325,80 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				return 
 			end
 			
+			local dried = {} -- marker for data if it has been transferred
+			local function transfer_data(data : {any?}, otherData : {any?}) -- similiar to reconciliation
+				for name, value in pairs(data) do
+					if otherData[name] == nil then
+						otherData[name] = value
+						dried[name] = true
+					elseif otherData[name] and typeof(otherData[name]) == "number" then
+						otherData[name] += value
+						dried[name] = true
+					elseif otherData[name] and typeof(otherData[name]) == "table" then
+						transfer_data(value, otherData[name])
+					end
+				end
+			end
+				
+			pcall(transfer_data, thisData, otherData)
 			
+			local success
+			for name in pairs(dried) do
+				if not thisData[name] then continue end
+				
+				if typeof(thisData[name]) ~= "number" then
+					success = change_element(thisData, name, nil, Penetration)
+				else
+					success = change_element(thisData, name, 0, Penetration)
+				end
+				
+				if not success then break end
+			end
+			
+			if not success then
+				throw(meta, record, "Failed when trying to end up the data in this record. Aborted.")
+				return 
+			end
 		else
+			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
+			if otherCurrentValue then
+				throw(meta, record, "The victim's record already have this data.")
+				return 
+			end
 			
+			local attempts = 0
+			repeat
+				local successGivingToOther = change_element(otherData, ThisData, thisCurrentValue, Penetration)
+				
+				if not successGivingToOther then
+					throw(meta, record, "Failed when trying to give whole data from this record to the victim's record.")
+					attempts += 1
+				
+					task.wait(0.1)
+				end
+			until successGivingToOther or attempts > 100
+			
+			if attempts >= 100 then
+				throw(meta, record, "Failed when trying to give whole data from this record to the victim's record. Aborted.")
+				return 
+			end
+			
+			attempts = 0
+			repeat
+				local succesEndingThis = change_element(thisData, ThisData, nil, Penetration)
+				
+				if not succesEndingThis then
+					throw(meta, record, "Failed when trying to end up the data in this record. Aborted.")
+					attempts += 1
+					
+					task.wait(0.1)
+				end
+			until succesEndingThis or attempts > 100
+			
+			if attempts >= 100 then
+				throw(meta, record, "Failed when trying to end up the data in this record. Aborted.")
+				return 
+			end
 		end
 	end
 	
