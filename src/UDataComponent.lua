@@ -3181,8 +3181,11 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			})
 		end
 		
-		dispatch(meta, record, "OnTransacted", readonly(record, AnotherRecord))
-		dispatch(meta, AnotherRecord, "OnTransacted", readonly(AnotherRecord, record))
+		local readOnlyThis = readonly(record, AnotherRecord)
+		local readOnlyAnother = readonly(AnotherRecord, record)
+		
+		dispatch(meta, record, "OnTransacted", readOnlyThis)
+		dispatch(meta, AnotherRecord, "OnTransacted", readOnlyAnother)
 		
 		return true
 	end
@@ -4615,7 +4618,8 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 		OnError = {},
 		OnDataFiltered = {},
 
-		OnOwnershipExpired = {}
+		OnOwnershipExpired = {},
+		OnTransacted = {},
 	}
 
 	if Configurations then
