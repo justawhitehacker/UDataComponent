@@ -2897,6 +2897,14 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			return false
 		end
 		
+		local now = workspace:GetServerTimeNow()
+		if (meta._SwapTimestamp[record.Key] and now - meta._SwapTimestamp[record.Key] < meta.SwappingCooldown) or (meta._SwapTimestamp[AnotherRecord.Key] and now - meta._SwapTimestamp[AnotherRecord.Key] < meta.SwappingCooldown) then
+			throw(meta, record, "Swapping is on cooldown.")
+			return false
+		end
+		meta._SwapTimestamp[record.Key] = now
+		meta._SwapTimestamp[AnotherRecord.Key] = now
+		
 		while record.CurrentState == "Running" do
 			task.wait()
 		end
