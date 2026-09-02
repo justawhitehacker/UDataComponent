@@ -2318,6 +2318,9 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
 			if otherCurrentValue and typeof(otherCurrentValue) ~= "table" then
 				throw(meta, record, "The data type of this record and victim's record is different.")
+				throw(meta, againstRecord, "The data type of this record and victim's record is different.")
+				
+				error("The data type of this record and victim's record is different")
 				return 
 			end
 			
@@ -2340,18 +2343,27 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
 			if otherCurrentValue then
 				throw(meta, record, "The victim's record already have this data.")
+				throw(meta, againstRecord, "This record already have this data.")
+				
+				error("The victim's record already have this data")
 				return 
 			end
 			
 			local successGivingToOther = change_element(otherData, ThisData, thisCurrentValue, Penetration)
 			if not successGivingToOther then
 				throw(meta, record, "Failed when trying to give whole data from this record to the victim's record.")
+				throw(meta, againstRecord, "Failed when trying to receive the data from other record to this record.")
+				
+				error("Failed when trying to give the data from this record to the victim's record")
 				return
 			end
 			
 			local succesEndingThis = change_element(thisData, ThisData, nil, Penetration)
 			if not succesEndingThis then
-				throw(meta, record, "Failed when trying to end up the data in this record. Aborted.")
+				throw(meta, record, "Failed when trying to end up the data in this record.")
+				throw(meta, againstRecord, "Failed when trying to end up the data in other record.")
+				
+				error("Failed when trying to end up the data in this record")
 				return
 			end
 		end
