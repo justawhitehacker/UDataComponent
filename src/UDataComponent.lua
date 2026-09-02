@@ -20,9 +20,6 @@ Last Update: Sep 02 2026
 SOME INFORMATION USE I OR ME, IT'S REFERENCING TO MYSELF (Raihan), AND
 SOME INFORMATION MENTION "UDC", IT'S REFERENCING TO SELF-AUTOMATIC SYSTEM OF THIS MODULE (UDataComponent)
 
-I MADE THIS MODULE TO MATCH WITH ECOSYSTEMS OF MY ROBLOX GAME SOON (Mining Exploration!) THAT SOON WILL BE RELEASED
-INSTEAD OF DOING PROJECTS IN UNREAL ENGINE, ALSO I'M IN MAKING ROBLOX GAME FOR GETTING SOME MONEY (Sad but True, hehe)
-
 Notes!
 
 UDataComponent is an Essential module.
@@ -220,14 +217,14 @@ export type UDCInfo = {
 	-- This is where the record of player's data is obtained:
 	-- @param: Key: number | string -> Key of the record of this player
 	-- @param: OwnerOfThisData: Player -> Player who owns this data, prevent other servers or other player to obtain or commit the data
-	ViewCurrentRecord: (UDCInfo: UDCInfo, Key: number | string, Version: string?) -> UDCRecord,
+	ViewCurrentRecord: (UDCInfo: UDCInfo, Key: number | string, Version: string?) -> UDCReadOnlyRecord,
 	-- This is where you can view the record of player's data, also showing owner and version
 	-- @param: Key: number | string -> Key of the record of this player
 	-- @param: Version: string? -> Version of the record of this player, if not specified, the latest version will be viewed
 	GetLocalRecord: (UDCInfo: UDCInfo) -> UDCRecord,
 	-- This is where the record of local data is obtained
 	-- You can say, in UDC, local data is just "global data of this data store" or "global record"
-	ViewLocalRecord: (UDCInfo: UDCInfo, Version: string?) -> UDCRecord,
+	ViewLocalRecord: (UDCInfo: UDCInfo, Version: string?) -> UDCReadOnlyRecord,
 	-- This is where you can view the record of local data
 
 	-- Configurations
