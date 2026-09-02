@@ -4718,8 +4718,10 @@ end
 
 -- Have a complain? DM me in IG: @raihanaufal_77
 -- reply takes time, i'm not too active at social media, but i'll reply your message ASAP
+-- because i have some projects in Unreal Engine to do
 
 -- punya suatu komplain? balas ke DM saya di IG: @raihanaufal_77
 -- balasan mungkin perlu waktu, saya tidak terlalu aktif di media sosial, tapi saya akan balas pesan anda secepatnya
+-- karena saya ada beberapa project di Unreal Engine untuk diselesaikan
 
 return UDataComponent :: UDataComponent
