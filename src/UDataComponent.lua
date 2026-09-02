@@ -3134,6 +3134,16 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 				continue
 			end
 			
+			if record.Owner and record.Owner.UserId and not Players:GetPlayerByUserId(record.Owner.UserId) then
+				throw(meta, record, "Owner of this is not in the game anymore.")
+				return false
+			end
+			
+			if AnotherRecord.Owner and AnotherRecord.Owner.UserId and not Players:GetPlayerByUserId(AnotherRecord.Owner.UserId) then
+				throw(meta, AnotherRecord, "Owner of another is not in the game anymore.")
+				return false
+			end
+			
 			local thisSuccess, thisErr = pcall(record.ForceSave, record, patcherEditors.Source)
 			if not thisSuccess then
 				record._TransactionProgress = false
