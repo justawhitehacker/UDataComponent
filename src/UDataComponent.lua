@@ -2,6 +2,9 @@
 UDataComponent (UDC)
 Created by RaihanMan18
 
+Scared of Race Condition? Scared of non-atomic transaction and data corruption? UDataComponent is a module that can help you with that.
+UDataComponent will help you to "cut" nonsense code lines that makes your code long. There is no longer code just for an operation, with UDC, everything will be handled greatfully.
+
 Profiles:
 Creator Name: @RaihanMan18 (Raihan Naufal Azmi)
 Creation Name: UDataComponent v2.0
@@ -11,7 +14,8 @@ License: MIT License
 Language: Luau
 Version: 2.0
 
-Last Update: Aug 25 2026
+Since: Aug 22 2026
+Last Update: Sep 02 2026
 
 SOME INFORMATION USE I OR ME, IT'S REFERENCING TO MYSELF (Raihan), AND
 SOME INFORMATION MENTION "UDC", IT'S REFERENCING TO SELF-AUTOMATIC SYSTEM OF THIS MODULE (UDataComponent)
@@ -237,6 +241,7 @@ export type UDCInfo = {
 	AutoSaveEnabled : boolean, -- If this UDataComponent's info allowed to auto-save data in background
 	AutoSaveInterval : number, -- Interval between each auto-save
 	WALDataSuffix : string, -- Suffixed to the DataStore name for the WAL
+	CanOwnershipExpired : boolean, -- If this UDataComponent's info allowed, the record can be expired when the expiration hits in
 	OwnershipExpiration : number, -- Duration for the data's ownership, where the player can holds the data and server claiming current data to other servers
 	SwappingEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
 	SwappingCooldown : number, -- Cooldown between each swap
@@ -344,6 +349,7 @@ export type __UDCInfo_Internal = {
 	AutoSaveEnabled : boolean, -- If this UDataComponent's info allowed to auto-save data in background
 	AutoSaveInterval : number, -- Interval between each auto-save
 	WALDataSuffix : string, -- Suffixed to the DataStore name for the WAL
+	CanOwnershipExpired : boolean, -- If this UDataComponent's info allowed, the record can be expired when the expiration hits in
 	OwnershipExpiration : number, -- Duration for the data's ownership, where the player can holds the data and server claiming current data to other servers
 	SwappingEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
 	SwappingCooldown : number, -- Cooldown between each swap
@@ -3253,7 +3259,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 
 		-- Checking if the data is still bound to this player
 		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
-		if now - unready.__bounds.since > timeout then
+		if meta.CanOwnershipExpired and now - unready.__bounds.since > timeout then
 			penalty("Record binding is already expired for this owner, you should refresh the ownership expiration of this record.")
 			dispatch(meta, record, "OnOwnershipExpired")
 			return false
@@ -4349,6 +4355,7 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.AutoSaveEnabled = true
 	self.AutoSaveInterval = 300
 	self.WALDataSuffix = "_wal"
+	self.CanOwnershipExpired = true
 	self.OwnershipExpiration = 1 -- 1 Day
 	self.SwappingEnabled = true
 	self.SwappingCooldown = 5
