@@ -2924,7 +2924,7 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		end
 		
 		if record._Meta ~= AnotherRecord._Meta then
-			throw(meta, record, "Another record is not from the same UDataComponent info.")
+			throw(meta, record, "Another record is not from the same info.")
 			return false
 		end
 		
@@ -2945,10 +2945,11 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		record._TransactionProgress = true
 		
 		local firstKey, secondKey = thisKey, anotherKey
-		if tostring(firstKey) < tostring(secondKey) then
-			firstKey, secondKey = secondKey, firstKey
+		if tostring(anotherKey) < tostring(thisKey) then
+			firstKey, secondKey = anotherKey, thisKey
 		end
 		
+		-- these mutexes used for function handling
 		local thisLockSuccess = meta._LockSessions:Acquire(firstKey)
 		local anotherLockSuccess = meta._LockSessions:Acquire(secondKey)
 		
@@ -2968,10 +2969,11 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		
 		local patcherSubclass = create_transaction_data_subclass(meta, record, AnotherRecord, patcherEditors)
 		local success, err = pcall(TransactionFunction, patcherSubclass)
+
+		meta._LockSessions:Release(firstKey)
+		meta._LockSessions:Release(secondKey)
 		
 		if not success then
-			meta._LockSessions:Release(firstKey)
-			meta._LockSessions:Release(secondKey)
 			record._TransactionProgress = false
 			
 			throw(meta, record, "Transaction function failed: " .. tostring(err))
@@ -2980,8 +2982,6 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		end
 		
 		if not patcherEditors.Source or not patcherEditors.Destination then
-			meta._LockSessions:Release(firstKey)
-			meta._LockSessions:Release(secondKey)
 			record._TransactionProgress = false
 			
 			throw(meta, record, "Transaction function didn't return transaction patches for both records.")
@@ -2999,8 +2999,6 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			
 			local thisSuccess, thisErr = pcall(record.ForceSave, record, patcherEditors.Source)
 			if not thisSuccess then
-				meta._LockSessions:Release(firstKey)
-				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
 				
 				throw(meta, record, "Failed to save source record: " .. tostring(thisErr))
@@ -3009,8 +3007,6 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			
 			local anotherSuccess, anotherErr = pcall(AnotherRecord.ForceSave, AnotherRecord, patcherEditors.Destination)
 			if not anotherSuccess then
-				meta._LockSessions:Release(firstKey)
-				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
 				
 				throw(meta, AnotherRecord, "Failed to save destination record: " .. tostring(anotherErr))
@@ -3023,9 +3019,6 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			
 			task.wait()
 		end
-		
-		meta._LockSessions:Release(firstKey)
-		meta._LockSessions:Release(secondKey)
 		record._TransactionProgress = false
 		
 		return true
