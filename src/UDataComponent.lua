@@ -1,4 +1,5 @@
 --[[
+UDataComponent (UDC)
 Created by RaihanMan18
 
 Profiles:
@@ -541,7 +542,7 @@ export type UDCValidation = {
 }
 
 export type UDCUtils = {
-	CreateTransaction: (UDCUtils: UDCUtils, AnotherRecord: UDCRecord, TransactionFunction: (ThisPatch: UDCTransactionPatch, AnotherPatch: UDCTransactionPatch) -> ()) -> boolean,
+	CreateTransaction: (UDCUtils: UDCUtils, AnotherRecord: UDCRecord, TransactionFunction: (EditorPatch: UDCTransactionPatch) -> ()) -> boolean,
 	-- Creating transaction between two records, where two records commited to force saving after transaction successful
 	
 	BindValue: (UDCUtils: UDCUtils, ThisData: string | number, ValueBase: ValueBase, DestroyedWhenZero: boolean?, Penetration: number?) -> UDCEventConnector,
@@ -583,20 +584,27 @@ export type UDCListenerConnector = {
 }
 
 export type UDCTransactionPatch = {
-	Trade: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Value: number, Penetration: number?) -> (),
-	-- (ONE-SIDED) where current record gives a data within value to another record
+	TradeToDestination: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Value: number, Penetration: number?) -> (),
+	-- (ONE-SIDED) this record gives the data of number-ed type to another record
+	-- This only works when the data is number-ed type
+	
+	TradeToSource: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Value: number, Penetration: number?) -> (),
+	-- (ONE-SIDED) another record gives the data of number-ed type to this record
 	-- This only works when the data is number-ed type
 	
 	Swap: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Penetration: number?) -> (),
 	-- (TWO-SIDED) where both records swap their data with each other, for same data element
 	-- Only works when the same data were also having same data type
 	
-	Give: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Penetration: number?) -> (),
+	GiveToDestination: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Penetration: number?) -> (),
 	-- (ONE-SIDED) where current record gives all of its data to another record
 	-- But in condition, if the data was number-ed type, you can give the whole number of data to the victim
 	
 	-- If the data was not number-ed type, the data from this record will be nil and the victim will get the data
 	-- Unless if the victim was having the data already, the data will not be given
+	
+	GiveToSource: (UDCTransactionPatch: UDCTransactionPatch, ThisData: string | number, Penetration: number?) -> (),
+	-- (ONE-SIDED) where another record gives all of its data to this record
 }
 
 export type UDCReadOnlyRecord = {
@@ -2845,9 +2853,23 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		return methods
 	end
 	
-	function utility:CreateTransaction(AnotherRecord: UDCRecord, TransactionFunction: (ThisPatch: UDCTransactionPatch, AnotherPatch: UDCTransactionPatch) -> ())
+	function utility:CreateTransaction(AnotherRecord: UDCRecord, TransactionFunction: (EditorPatch: UDCTransactionPatch) -> ())
 		if not meta.SwappingEnabled then
 			throw(meta, record, "Swapping is disabled.")
+			return false
+		end
+		
+		while record.CurrentState == "Running" do
+			task.wait()
+		end
+		
+		if record._ReadyProgress then
+			throw(meta, record, "This record is currently in ready progress, unable to override current progress.")
+			return false
+		end
+		
+		if record._TransactionProgress then
+			throw(meta, record, "This record is currently in transaction progress, unable to override current progress.")
 			return false
 		end
 		
@@ -2883,7 +2905,84 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			throw(meta, record, "One of the record (potentially both) doesn't have data in the cache.")
 			return false
 		end
+		record._TransactionProgress = true
 		
+		local thisLockSuccess = meta._LockSessions:Acquire(thisKey)
+		local anotherLockSuccess = meta._LockSessions:Acquire(anotherKey)
+		
+		if not thisLockSuccess or not anotherLockSuccess then
+			if thisLockSuccess then meta._LockSessions:Release(thisKey) end
+			if anotherLockSuccess then meta._LockSessions:Release(anotherKey) end
+			record._TransactionProgress = false
+			
+			throw(meta, record, "Failed to acquire lock for one of the records (potentially both).")
+			return false
+		end
+		
+		local patcherEditors = {
+			Source = nil,
+			Destination = nil,
+		}
+		
+		local patcherSubclass = create_transaction_data_subclass(meta, record, AnotherRecord, patcherEditors)
+		local success, err = pcall(TransactionFunction, patcherSubclass)
+		
+		if not success then
+			meta._LockSessions:Release(thisKey)
+			meta._LockSessions:Release(anotherKey)
+			record._TransactionProgress = false
+			
+			throw(meta, record, "Transaction function failed: " .. tostring(err))
+			throw(meta, AnotherRecord, "Transaction function failed: " .. tostring(err))
+			return false
+		end
+		
+		if not patcherEditors.Source or not patcherEditors.Destination then
+			meta._LockSessions:Release(thisKey)
+			meta._LockSessions:Release(anotherKey)
+			record._TransactionProgress = false
+			
+			throw(meta, record, "Transaction function didn't return transaction patches for both records.")
+			throw(meta, AnotherRecord, "Transaction function didn't return transaction patches for both records.")
+			return false
+		end
+		
+		while record._TransactionProgress do
+			local budget = DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
+			
+			if budget < 1 then
+				task.wait()
+				continue
+			end
+			
+			local thisSuccess, thisErr = pcall(record.ForceSave, record, patcherEditors.Source)
+			if not thisSuccess then
+				meta._LockSessions:Release(thisKey)
+				meta._LockSessions:Release(anotherKey)
+				record._TransactionProgress = false
+				
+				throw(meta, record, "Failed to save source record: " .. tostring(thisErr))
+				return false
+			end
+			
+			local anotherSuccess, anotherErr = pcall(AnotherRecord.ForceSave, AnotherRecord, patcherEditors.Destination)
+			if not anotherSuccess then
+				meta._LockSessions:Release(thisKey)
+				meta._LockSessions:Release(anotherKey)
+				record._TransactionProgress = false
+				
+				throw(meta, AnotherRecord, "Failed to save destination record: " .. tostring(anotherErr))
+				return false
+			end
+			
+			task.wait()
+		end
+		
+		meta._LockSessions:Release(thisKey)
+		meta._LockSessions:Release(anotherKey)
+		record._TransactionProgress = false
+		
+		return true
 	end
 	
 	function utility:BindValue(ThisData: string | number, ValueBase: ValueBase, DestroyedWhenZero: boolean?, Penetration: number?)
@@ -2946,6 +3045,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	-- Because Write and Save are same, but have different roles in record commiting
 	record._ArchivingProgress = false -- This is to indicate if the record's archiving in progress
 	record._UnarchivingProgress = false -- This is to indicate if the record's unarchiving in progress
+	record._TransactionProgress = false -- This is to indicate if the record's transaction in progress
 	record._CurrentlyStandby = false -- This is to indicate if the record is currently in standby mode
 
 	record._LastCompressedData = nil -- This is to store the last compressed data
