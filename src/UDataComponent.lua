@@ -179,7 +179,7 @@ PlayerRecord:
 		-- since : number -> Time since this player bound or own this data
 		-- lastheartbeat : number -> Time since the last heartbeat sent for this data, meaning the server is still alive
 		-- serverid : string? -> ServerID (JobID) of this data, where this id contains the id of server who claimed this data
-	__data : any -> Data of this player
+	__data : buffer -> Data of this player
 	__flag : string (should be char) -> flag that indicates whether the data of this record was compressed ('C') or real ('R'), so that UDC will handle it
 	
 	some other things
@@ -2364,6 +2364,14 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 		-- number for giving, table for merging, and another else just checks if the data was already available or not
 		-- if not, give, if its available, then set it
 		if typeof(thisCurrentValue) == "number" then
+			if thisCurrentValue <= 0 then
+				throw(meta, record, "The data from this record is 0 or negative.")
+				throw(meta, againstRecord, "The data from other record is 0 or negative.")
+				
+				error("The data from this record is 0 or negative")
+				return 
+			end
+			
 			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
 			if typeof(otherCurrentValue) ~= "number" then
 				throw(meta, record, "The data type of this record and victim's record is different.")
@@ -2480,6 +2488,14 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 		-- number for giving, table for merging, and another else just checks if the data was already available or not
 		-- if not, give, if its available, then set it
 		if typeof(thisCurrentValue) == "number" then
+			if thisCurrentValue <= 0 then
+				throw(meta, record, "The data from this record is 0 or negative.")
+				throw(meta, againstRecord, "The data from other record is 0 or negative.")
+
+				error("The data from this record is 0 or negative")
+				return 
+			end
+			
 			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
 			if typeof(otherCurrentValue) ~= "number" then
 				throw(meta, againstRecord, "The data type of this record and victim's record is different.")
