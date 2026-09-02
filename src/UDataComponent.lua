@@ -499,6 +499,7 @@ export type UDCEvent = {
 	
 	OnTransacted: (UDCEvent: UDCEvent, Callback: (Key: string | number, TransactionInfo: UDCTransactionData) -> any) -> UDCEventConnector,
 	-- happened when CreateTransaction successfully running and two records obtained their own transaction results
+	-- (REMEMBER) TransactionInfo is a read-only table, you can't change the transaction result
 }
 
 export type UDCValidation = {
