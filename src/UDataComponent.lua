@@ -496,6 +496,9 @@ export type UDCEvent = {
 
 	OnOwnershipExpired: (UDCEvent: UDCEvent, Callback: (Key: string | number) -> any) -> UDCEventConnector,
 	-- happened when the ownership of this record expired when preparing
+	
+	OnTransacted: (UDCEvent: UDCEvent, Callback: (Key: string | number, TransactionInfo: UDCTransactionData) -> any) -> UDCEventConnector,
+	-- happened when CreateTransaction successfully running and two records obtained their own transaction results
 }
 
 export type UDCValidation = {
@@ -576,6 +579,18 @@ export type UDCBroadcastingPacket = {
 	BroadcasterOwnerId: number, -- the owner id of the record
 	BroadcastTime: number,	 -- timestamp of broadcasting
 	OtherThings: any?, -- other things you want to send with the broadcast
+}
+
+export type UDCTransactionData = {
+	SourceKey: string | number, -- record's key of the source
+	DestinationKey: string | number, -- record's key of the destination
+	SourceDataGains: any, -- history transaction data of source that its gained
+	SourceDataLoses: boolean, -- history transaction data of source that its lost
+	DestinationDataGains: any, -- history transaction data of destination that its gained
+	DestinationDataLoses: any, -- history transaction data of destination that its lost
+	SourcePlayerId: number?, -- the player id of the source
+	DestinationPlayerId: number?, -- the player id of the destination
+	HappenedTime: number, -- timestamp of transaction
 }
 
 export type UDCEventConnector = {
@@ -1971,6 +1986,10 @@ local function create_event_class(meta : __UDCInfo_Internal, record : UDCRecord)
 	function events:OnOwnershipExpired(Callback: (Key: string | number) -> any)
 		return registerCallback("OnOwnershipExpired", Callback)
 	end
+	
+	function events:OnTransacted(Callback: (Key: string | number, TransactionInfo: UDCTransactionData) -> any)
+		return registerCallback("OnTransacted", Callback)
+	end
 
 	return events :: UDCEvent
 end
@@ -2190,6 +2209,20 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			return
 		end
 		
+		-- collecting info for callback (AnotherRecord's side)
+		editors.History = editors.History or {}
+		
+		editors.History[againstRecord.Key] = editors.History[againstRecord.Key] or {}
+		editors.History[againstRecord.Key].Loses = editors.History[againstRecord.Key].Loses or {}
+		editors.History[againstRecord.Key].Gains = editors.History[againstRecord.Key].Gains or {}
+		
+		editors.History[record.Key] = editors.History[record.Key] or {}
+		editors.History[record.Key].Loses = editors.History[record.Key].Loses or {}
+		editors.History[record.Key].Gains = editors.History[record.Key].Gains or {}
+		
+		-- because this is a number type
+		editors.History[againstRecord.Key].Gains[ThisData] = (editors.History[againstRecord.Key].Gains[ThisData] or 0) + Value
+		
 		local successToDecrease = change_element(thisData, ThisData, currentValue - Value, Penetration)
 		if not successToDecrease then
 			throw(meta, record, "Failed when trying to decrease the data from this record.")
@@ -2198,6 +2231,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			error("Failed when trying to decrease the data from this record")
 			return
 		end
+		
+		editors.History[record.Key].Loses[ThisData] = (editors.History[record.Key].Loses[ThisData] or 0) + Value
 	end
 	
 	function methods:TradeToSource(ThisData: string | number, Value: number, Penetration: number?)
@@ -2259,6 +2294,20 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			error("Failed when trying to trade the data from this record to other record")
 			return
 		end
+		
+		-- collecting info for callback (AnotherRecord's side)
+		editors.History = editors.History or {}
+
+		editors.History[againstRecord.Key] = editors.History[againstRecord.Key] or {}
+		editors.History[againstRecord.Key].Loses = editors.History[againstRecord.Key].Loses or {}
+		editors.History[againstRecord.Key].Gains = editors.History[againstRecord.Key].Gains or {}
+
+		editors.History[record.Key] = editors.History[record.Key] or {}
+		editors.History[record.Key].Loses = editors.History[record.Key].Loses or {}
+		editors.History[record.Key].Gains = editors.History[record.Key].Gains or {}
+
+		-- because this is a number type
+		editors.History[againstRecord.Key].Loses[ThisData] = (editors.History[againstRecord.Key].Loses[ThisData] or 0) + Value
 
 		local successToDecrease = change_element(thisData, ThisData, currentValue - Value, Penetration)
 		if not successToDecrease then
@@ -2268,6 +2317,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			error("Failed when trying to decrease the data from this record")
 			return
 		end
+		
+		editors.History[record.Key].Gains[ThisData] = (editors.History[record.Key].Gains[ThisData] or 0) + Value
 	end
 	
 	function methods:Swap(ThisData: string | number, Penetration: number?)
@@ -2327,6 +2378,19 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			return
 		end
 		
+		editors.History = editors.History or {}
+
+		editors.History[againstRecord.Key] = editors.History[againstRecord.Key] or {}
+		editors.History[againstRecord.Key].Loses = editors.History[againstRecord.Key].Loses or {}
+		editors.History[againstRecord.Key].Gains = editors.History[againstRecord.Key].Gains or {}
+
+		editors.History[record.Key] = editors.History[record.Key] or {}
+		editors.History[record.Key].Loses = editors.History[record.Key].Loses or {}
+		editors.History[record.Key].Gains = editors.History[record.Key].Gains or {}
+		
+		editors.History[record.Key].Gains[ThisData] = otherCurrentValue
+		editors.History[record.Key].Loses[ThisData] = thisCurrentValue
+		
 		local successForOtherSwap = change_element(otherData, ThisData, thisCurrentValue, Penetration)
 		if not successForOtherSwap then
 			throw(meta, record, "Failed when trying to swap the data from victim's record to this record.")
@@ -2335,6 +2399,9 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			error("Failed when trying to swap the data from victim's record to this record")
 			return
 		end
+		
+		editors.History[againstRecord.Key].Gains[ThisData] = thisCurrentValue
+		editors.History[againstRecord.Key].Loses[ThisData] = otherCurrentValue
 	end
 	
 	function methods:GiveToDestination(ThisData: string | number, Penetration: number?)
@@ -2367,6 +2434,16 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			return 
 		end
 		
+		editors.History = editors.History or {}
+
+		editors.History[againstRecord.Key] = editors.History[againstRecord.Key] or {}
+		editors.History[againstRecord.Key].Loses = editors.History[againstRecord.Key].Loses or {}
+		editors.History[againstRecord.Key].Gains = editors.History[againstRecord.Key].Gains or {}
+
+		editors.History[record.Key] = editors.History[record.Key] or {}
+		editors.History[record.Key].Loses = editors.History[record.Key].Loses or {}
+		editors.History[record.Key].Gains = editors.History[record.Key].Gains or {}
+		
 		-- number for giving, table for merging, and another else just checks if the data was already available or not
 		-- if not, give, if its available, then set it
 		if typeof(thisCurrentValue) == "number" then
@@ -2398,6 +2475,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				return
 			end
 			
+			editors.History[againstRecord.Key].Gains[ThisData] = (editors.History[againstRecord.Key].Gains[ThisData] or 0) + thisCurrentValue
+			
 			local successGivingToThis = change_element(thisData, ThisData, 0, Penetration)
 			if not successGivingToThis then
 				throw(meta, record, "Failed when trying to give the data from victim's record to this record.")
@@ -2406,6 +2485,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				error("Failed when trying to swap the data from victim's record to this record")
 				return
 			end
+			
+			editors.History[record.Key].Loses[ThisData] = (editors.History[record.Key].Loses[ThisData] or 0) + thisCurrentValue
 		elseif typeof(thisCurrentValue) == "table" then
 			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
 			if otherCurrentValue and typeof(otherCurrentValue) ~= "table" then
@@ -2416,14 +2497,23 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				return 
 			end
 			
+			editors.History[againstRecord.Key].Gains[ThisData] = {}
+			editors.History[record.Key].Loses[ThisData] = {}
+			
 			local function transfer_data(source : {any?}, destination : {any?}) -- similiar to reconciliation with addition
 				for name, value in pairs(source) do
 					if destination[name] == nil then
 						destination[name] = value
 						source[name] = nil
+						
+						editors.History[againstRecord.Key].Gains[ThisData][name] = value
+						editors.History[record.Key].Loses[ThisData][name] = value
 					elseif typeof(value) == "number" and typeof(destination[name]) == "number" then
 						destination[name] += value
 						source[name] = nil
+						
+						editors.History[againstRecord.Key].Gains[ThisData][name] = (editors.History[againstRecord.Key].Gains[ThisData][name] or 0) + value
+						editors.History[record.Key].Loses[ThisData][name] = (editors.History[record.Key].Loses[ThisData][name] or 0) + value
 					elseif typeof(value) == "table" and typeof(destination[name]) == "table" then
 						transfer_data(value, destination[name])
 					end
@@ -2458,6 +2548,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				return
 			end
 			
+			editors.History[againstRecord.Key].Gains[ThisData] = thisCurrentValue
+			
 			local succesEndingThis = change_element(thisData, ThisData, nil, Penetration)
 			if not succesEndingThis then
 				throw(meta, record, "Failed when trying to end up the data in this record.")
@@ -2466,6 +2558,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				error("Failed when trying to end up the data in this record")
 				return
 			end
+			
+			editors.History[record.Key].Loses[ThisData] = thisCurrentValue
 		end
 	end
 	
@@ -2498,6 +2592,16 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 			error("This record doesn't have an exact element to trade")
 			return 
 		end
+		
+		editors.History = editors.History or {}
+
+		editors.History[record.Key] = editors.History[record.Key] or {}
+		editors.History[record.Key].Loses = editors.History[record.Key].Loses or {}
+		editors.History[record.Key].Gains = editors.History[record.Key].Gains or {}
+
+		editors.History[againstRecord.Key] = editors.History[againstRecord.Key] or {}
+		editors.History[againstRecord.Key].Loses = editors.History[againstRecord.Key].Loses or {}
+		editors.History[againstRecord.Key].Gains = editors.History[againstRecord.Key].Gains or {}
 
 		-- number for giving, table for merging, and another else just checks if the data was already available or not
 		-- if not, give, if its available, then set it
@@ -2529,6 +2633,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				error("Failed when trying to swap the data from this record to other record")
 				return
 			end
+			
+			editors.History[record.Key].Gains[ThisData] = (editors.History[record.Key].Gains[ThisData] or 0) + thisCurrentValue
 
 			local successGivingToThis = change_element(thisData, ThisData, 0, Penetration)
 			if not successGivingToThis then
@@ -2538,6 +2644,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				error("Failed when trying to swap the data from victim's record to this record")
 				return
 			end
+			
+			editors.History[againstRecord.Key].Loses[ThisData] = (editors.History[againstRecord.Key].Loses[ThisData] or 0) + thisCurrentValue
 		elseif typeof(thisCurrentValue) == "table" then
 			local otherCurrentValue = find_element(otherData, ThisData, Penetration)
 			if otherCurrentValue and typeof(otherCurrentValue) ~= "table" then
@@ -2547,15 +2655,24 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				error("The data type of this record and victim's record is different")
 				return 
 			end
+			
+			editors.History[record.Key].Gains[ThisData] = {}
+			editors.History[againstRecord.Key].Loses[ThisData] = {}
 
 			local function transfer_data(source : {any?}, destination : {any?}) -- similiar to reconciliation with addition
 				for name, value in pairs(source) do
 					if destination[name] == nil then
 						destination[name] = value
 						source[name] = nil
+						
+						editors.History[record.Key].Gains[ThisData][name] = value
+						editors.History[againstRecord.Key].Loses[ThisData][name] = value
 					elseif typeof(value) == "number" and typeof(destination[name]) == "number" then
 						destination[name] += value
 						source[name] = nil
+						
+						editors.History[record.Key].Gains[ThisData][name] = (editors.History[record.Key].Gains[ThisData][name] or 0) + value
+						editors.History[againstRecord.Key].Loses[ThisData][name] = (editors.History[againstRecord.Key].Loses[ThisData][name] or 0) + value
 					elseif typeof(value) == "table" and typeof(destination[name]) == "table" then
 						transfer_data(value, destination[name])
 					end
@@ -2589,6 +2706,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				error("Failed when trying to give the data from this record to the victim's record")
 				return
 			end
+			
+			editors.History[record.Key].Gains[ThisData] = thisCurrentValue
 
 			local succesEndingThis = change_element(thisData, ThisData, nil, Penetration)
 			if not succesEndingThis then
@@ -2598,6 +2717,8 @@ local function create_transaction_data_subclass(meta : __UDCInfo_Internal, recor
 				error("Failed when trying to end up the data in this record")
 				return
 			end
+			
+			editors.History[againstRecord.Key].Loses[ThisData] = otherCurrentValue
 		end
 	end
 	
@@ -2979,6 +3100,7 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		local patcherEditors = {
 			Source = nil,
 			Destination = nil,
+			History = {}
 		}
 		
 		local patcherSubclass = create_transaction_data_subclass(meta, record, AnotherRecord, patcherEditors)
@@ -3034,6 +3156,33 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			task.wait()
 		end
 		record._TransactionProgress = false
+		
+		--SourceKey: string | number, -- record's key of the source
+		--	DestinationKey: string | number, -- record's key of the destination
+		--	SourceDataGains: any, -- history transaction data of source that its gained
+		--	SourceDataLoses: boolean, -- history transaction data of source that its lost
+		--	DestinationDataGains: any, -- history transaction data of destination that its gained
+		--	DestinationDataLoses: any, -- history transaction data of destination that its lost
+		--	SourcePlayerId: number?, -- the player id of the source
+		--	DestinationPlayerId: number?, -- the player id of the destination
+		--	HappenedTime: number, -- timestamp of transaction
+		
+		local function readonly(source, dst)
+			return deepfreeze({
+				SourceKey = source.Key,	
+				DestinationKey = dst.Key,
+				SourceDataGains = patcherEditors.History and patcherEditors.History[source.Key] and patcherEditors.History[source.Key].Gains,
+				SourceDataLoses = patcherEditors.History and patcherEditors.History[source.Key] and patcherEditors.History[source.Key].Loses,
+				DestinationDataGains = patcherEditors.History and patcherEditors.History[dst.Key] and patcherEditors.History[dst.Key].Gains,
+				DestinationDataLoses = patcherEditors.History and patcherEditors.History[dst.Key] and patcherEditors.History[dst.Key].Loses,
+				SourcePlayerId = source.Owner and source.Owner.UserId,
+				DestinationPlayerId = dst.Owner and dst.Owner.UserId,
+				HappenedTime = os.time(), -- using os.time() to match clock system of this machine
+			})
+		end
+		
+		dispatch(meta, record, "OnTransacted", readonly(record, AnotherRecord))
+		dispatch(meta, AnotherRecord, "OnTransacted", readonly(AnotherRecord, record))
 		
 		return true
 	end
