@@ -3678,6 +3678,131 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 	function record:COMINGSOON_DestroyLogin(Password: string) -- COMING SOON
 
 	end
+	
+	-- Reseting the ownership duration of the record
+	-- Where this can be called in WakingUp or Ready state
+	function record:ResetOwnership(FindingPlayerTimeout: number?)
+		FindingPlayerTimeout = FindingPlayerTimeout or 10
+		
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled.")
+			return false
+		end
+		
+		while record._AwakeProgress do
+			task.wait()
+		end
+		
+		while record._ReadyProgress do
+			task.wait()
+		end
+		
+		if record.CurrentState ~= "WakingUp" and record.CurrentState ~= "Ready" then
+			throw(meta, record, "To reset the ownership duration of this record, must be after Awake or Ready.")
+			return false
+		end
+		
+		if record._SaveProgress then
+			throw(meta, record, "This record is in save progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
+			return false
+		end
+		
+		if record._UnarchivingProgress then
+			throw(meta, record, "This record is in unarchiving progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._ArchivingProgress then
+			throw(meta, record, "This record is in archiving progress, unable to override current record's state process.")
+			return false
+		end
+		
+		local now = workspace:GetServerTimeNow()
+		if meta._UnreadyData[record.Key] then
+			local unready = meta._UnreadyData[record.Key]
+			
+			if not unready.__bounds or not unready.__bounds.since or not unready.__bounds.id or not unready.__bounds.serverid or not unready.__bounds.lastheartbeat then
+				throw(meta, record, "Record is not ready or datas are missing.")
+				return false
+			end
+			
+			local assumedOwner = record.Owner and record.Owner.UserId or 0
+			if unready.__bounds.id ~= assumedOwner then
+				throw(meta, record, "You can't reset the ownership of this record meanwhile it's belonging to another owner.")
+				return false
+			end
+			
+			local isAlive = now - unready.__bounds.lastheartbeat < meta.StaleServerClaimingTime
+			if unready.__bounds.serverid ~= ServerId and isAlive then
+				throw(meta, record, "You can't reset the ownership of this record meanwhile it's on another server.")
+				return false
+			end
+			
+			local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
+			if now - unready.__bounds.since < timeout then
+				throw(meta, record, "The ownership duration of this record is still running and available.")
+				return false
+			end
+
+			local found = false
+			while record.Owner and not found do
+				if Players:GetPlayerByUserId(unready.__bounds.id) and Players:GetPlayerByUserId(assumedOwner) then
+					found = true
+				elseif workspace:GetServerTimeNow() - now < FindingPlayerTimeout then
+					task.wait()
+				else
+					return false
+				end
+			end
+			
+			meta._UnreadyData[record.Key].__bounds = {
+				id = assumedOwner,
+				serverid = ServerId,
+				since = workspace:GetServerTimeNow(),
+				lastheartbeat = workspace:GetServerTimeNow()
+			}
+			
+			return true
+		elseif meta._DataCache[record.Key] then -- this should be guaranteed that current data is actually belong to this server and this owner
+			local data = meta._DataCache[record.Key]
+			
+			if not data.__bounds or not data.__bounds.since or not data.__bounds.id or not data.__bounds.lastheartbeat then
+				throw(meta, record, "Some datas in record are missing")
+				return false
+			end
+			
+			local assumedOwner = record.Owner and record.Owner.UserId or 0
+			local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
+			if workspace:GetServerTimeNow() - data.__bounds.since < timeout then
+				throw(meta, record, "The ownership duration of this record is still running and available.")
+				return false
+			end
+			
+			local found = false
+			while record.Owner and not found do
+				if Players:GetPlayerByUserId(assumedOwner) and Players:GetPlayerByUserId(data.__bounds.id) then
+					found = true
+				elseif workspace:GetServerTimeNow() - data.__bounds.since < FindingPlayerTimeout then
+					task.wait()
+				else
+					return false
+				end
+			end
+			
+			meta._DataCache[record.Key].__bounds.since = workspace:GetServerTimeNow()
+			meta._DataCache[record.Key].__bounds.lastheartbeat = workspace:GetServerTimeNow()
+			
+			return true
+		end
+		
+		throw(meta, record, "Record is not ready or not found.")
+		return false
+	end
 
 	-- Saving the custom data or edited-whole data into record, as waiting for its queue turn
 	-- Use SegmentIndex if you ever want to make cheaper data to save
