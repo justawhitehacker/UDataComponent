@@ -3139,11 +3139,13 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			end
 			
 			if record.Owner and record.Owner.UserId and not Players:GetPlayerByUserId(record.Owner.UserId) then
+				record._TransactionProgress = false
 				throw(meta, record, "Owner of this is not in the game anymore.")
 				return false
 			end
 			
 			if AnotherRecord.Owner and AnotherRecord.Owner.UserId and not Players:GetPlayerByUserId(AnotherRecord.Owner.UserId) then
+				record._TransactionProgress = false
 				throw(meta, AnotherRecord, "Owner of another is not in the game anymore.")
 				return false
 			end
@@ -3156,6 +3158,13 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 				return false
 			end
 			
+			if not thisErr then
+				record._TransactionProgress = false
+				
+				throw(meta, record, "Source record isn't able to saving.")
+				return false
+			end
+			
 			local anotherSuccess, anotherErr = pcall(AnotherRecord.ForceSave, AnotherRecord, patcherEditors.Destination)
 			if not anotherSuccess then
 				record._TransactionProgress = false
@@ -3164,11 +3173,14 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 				return false
 			end
 			
-			if thisSuccess and anotherSuccess then
-				break
+			if not anotherErr then
+				record._TransactionProgress = false
+				
+				throw(meta, AnotherRecord, "Destination record isn't able to saving.")
+				return false
 			end
 			
-			task.wait()
+			break
 		end
 		record._TransactionProgress = false
 		
