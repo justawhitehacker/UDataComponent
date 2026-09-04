@@ -3023,6 +3023,11 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			return false
 		end
 		
+		if not AnotherRecord or typeof(AnotherRecord) ~= "table" then
+			throw(meta, record, "Another record is invalid!")
+			return false
+		end
+		
 		local now = workspace:GetServerTimeNow()
 		if (meta._SwapTimestamp[record.Key] and now - meta._SwapTimestamp[record.Key] < meta.SwappingCooldown) or (meta._SwapTimestamp[AnotherRecord.Key] and now - meta._SwapTimestamp[AnotherRecord.Key] < meta.SwappingCooldown) then
 			throw(meta, record, "Swapping is on cooldown.")
@@ -3042,11 +3047,6 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		
 		if record._TransactionProgress then
 			throw(meta, record, "This record is currently in transaction progress, unable to override current progress.")
-			return false
-		end
-		
-		if not AnotherRecord or typeof(AnotherRecord) ~= "table" then
-			throw(meta, record, "Another record is invalid!")
 			return false
 		end
 		
@@ -3110,11 +3110,10 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		
 		local patcherSubclass = create_transaction_data_subclass(meta, record, AnotherRecord, patcherEditors)
 		local success, err = pcall(TransactionFunction, patcherSubclass)
-
-		meta._LockSessions:Release(firstKey)
-		meta._LockSessions:Release(secondKey)
 		
 		if not success then
+			meta._LockSessions:Release(firstKey)
+			meta._LockSessions:Release(secondKey)
 			record._TransactionProgress = false
 			
 			throw(meta, record, "Transaction function failed: " .. tostring(err))
@@ -3123,6 +3122,8 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		end
 		
 		if not patcherEditors.Source or not patcherEditors.Destination then
+			meta._LockSessions:Release(firstKey)
+			meta._LockSessions:Release(secondKey)
 			record._TransactionProgress = false
 			
 			throw(meta, record, "Transaction function didn't return transaction patches for both records.")
@@ -3139,19 +3140,27 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			end
 			
 			if record.Owner and record.Owner.UserId and not Players:GetPlayerByUserId(record.Owner.UserId) then
+				meta._LockSessions:Release(firstKey)
+				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
+				
 				throw(meta, record, "Owner of this is not in the game anymore.")
 				return false
 			end
 			
 			if AnotherRecord.Owner and AnotherRecord.Owner.UserId and not Players:GetPlayerByUserId(AnotherRecord.Owner.UserId) then
+				meta._LockSessions:Release(firstKey)
+				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
+				
 				throw(meta, AnotherRecord, "Owner of another is not in the game anymore.")
 				return false
 			end
 			
 			local thisSuccess, thisErr = pcall(record.ForceSave, record, patcherEditors.Source)
 			if not thisSuccess then
+				meta._LockSessions:Release(firstKey)
+				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
 				
 				throw(meta, record, "Failed to save source record: " .. tostring(thisErr))
@@ -3159,6 +3168,8 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			end
 			
 			if not thisErr then
+				meta._LockSessions:Release(firstKey)
+				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
 				
 				throw(meta, record, "Source record isn't able to saving.")
@@ -3167,6 +3178,8 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			
 			local anotherSuccess, anotherErr = pcall(AnotherRecord.ForceSave, AnotherRecord, patcherEditors.Destination)
 			if not anotherSuccess then
+				meta._LockSessions:Release(firstKey)
+				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
 				
 				throw(meta, AnotherRecord, "Failed to save destination record: " .. tostring(anotherErr))
@@ -3174,6 +3187,8 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			end
 			
 			if not anotherErr then
+				meta._LockSessions:Release(firstKey)
+				meta._LockSessions:Release(secondKey)
 				record._TransactionProgress = false
 				
 				throw(meta, AnotherRecord, "Destination record isn't able to saving.")
@@ -3183,6 +3198,9 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 			break
 		end
 		record._TransactionProgress = false
+		
+		meta._LockSessions:Release(firstKey)
+		meta._LockSessions:Release(secondKey)
 		
 		--SourceKey: string | number, -- record's key of the source
 		--	DestinationKey: string | number, -- record's key of the destination
