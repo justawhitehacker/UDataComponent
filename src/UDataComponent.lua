@@ -445,6 +445,10 @@ export type UDCRecord = {
 	-- @important -- You can only release the record from original server, not server that stole the record
 	-- @param Password: string -- Safety key before destroying the login session of this record
 	-- @return boolean -- Status of the destroying the login session, true if success
+	
+	ResetOwnership: (UDCRecord: UDCRecord, FindingPlayerTimeout: number?) -> boolean, -- (Suspending) reseting the duration of ownership of record that has been expired, can be called either after Awake or Ready
+	-- @param FindingPlayerTimeout: number? -- Timeout for finding the player, default is 10 seconds
+	-- @return boolean -- Status of the resetting the ownership, true if success
 
 	ForceWrite: (UDCRecord: UDCRecord, WritingFunction: (CurrentData: any) -> ()) -> boolean, -- (Suspending) same as record:Write(...), but this will commit into datastore immediately
 	-- @param WritingFunction: (CurrentData: any) -> () -- Function that used as Write session over the data
