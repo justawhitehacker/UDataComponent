@@ -635,7 +635,7 @@ export type UDCTransactionPatch = {
 
 export type UDCReadOnlyRecord = {
 	Version: number,
-	Owner: Player?,
+	Owner: number?,
 	Data: { any? },
 }
 
@@ -4830,9 +4830,7 @@ function UDataComponent:ViewCurrentRecord(Key: number | string, Version: string?
 		return nil
 	end
 
-	local plr = Players:GetPlayerByUserId(ResultData and ResultData.__bounds and ResultData.__bounds.id)
-
-	return deepfreeze({ Version = ResultData and ResultData.__version or 0, Owner = plr or nil, Data = decompressed })
+	return deepfreeze({ Version = ResultData and ResultData.__version or 0, Owner = ResultData and ResultData.__bounds and ResultData.__bounds.id or nil, Data = decompressed })
 end
 
 function UDataComponent:GetLocalRecord() : UDCRecord
