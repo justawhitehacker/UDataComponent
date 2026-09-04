@@ -235,18 +235,14 @@ export type UDCInfo = {
 	DataWritingCooldown : number, -- Cooldown between each data write
 	MaxKeyLength : number, -- Maximum key-length for each keys
 	BackupEnabled : boolean, -- If this UDataComponent's info allowed to call backup data when fatal error occurs
-	DefaultBackupAttempts : number, --  Strictly gives some attempts to get the data-backup when normal load failed
-	DefaultBackupYieldDuration : number, -- Yield duration between each attempt of get the data-backup
 	StrictlyUnallowDetaching : boolean, -- If this UDataComponent's info unallowed to remove/archive current data
 	AutoSaveEnabled : boolean, -- If this UDataComponent's info allowed to auto-save data in background
 	AutoSaveInterval : number, -- Interval between each auto-save
 	WALDataSuffix : string, -- Suffixed to the DataStore name for the WAL
 	CanOwnershipExpired : boolean, -- If this UDataComponent's info allowed, the record can be expired when the expiration hits in
 	OwnershipExpiration : number, -- Duration for the data's ownership, where the player can holds the data and server claiming current data to other servers
-	SwappingEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
-	SwappingCooldown : number, -- Cooldown between each swap
-	CacheCleaningEnabled : boolean, -- If this UDataComponent's info allowed to clean up the cache
-	CacheCleaningInterval : number,-- Interval between each cache cleaning
+	TransactionEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
+	TransactionCooldown : number, -- Cooldown between each swap
 	DataBlueprint : {any?}, -- Blueprint for the data, where when a new player joins, the data will be filled with the blueprint as template or first data
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
 	CompressionLevel : number, -- Compression level for the data
@@ -254,13 +250,13 @@ export type UDCInfo = {
 	CompressionQueueCooldown : number, -- Cooldown between each compression
 	MaxDecompressedSize : number, -- Maximum size for the data to be compressed, in bytes
 	LocalDataNamespace : string, -- Namespace for the local record level
-	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
-	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
-	MessagingExpiration : number, -- Duration for the broadcast to expire
-	MessagingMaxPacketSize : number, -- Maximum size for the broadcast message
-	MessagingSendingCooldown : number, -- Cooldown for sending the broadcast informations
-	MessagingReceivingCooldown : number, -- Cooldown for listening the broadcast messages
-	MessagingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
+	BroadcastingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
+	BroadcastingNamespace : string, -- Namespace for the Broadcast channel for each server
+	BroadcastingExpiration : number, -- Duration for the broadcast to expire
+	BroadcastingMaxPacketSize : number, -- Maximum size for the broadcast message
+	BroadcastingSendingCooldown : number, -- Cooldown for sending the broadcast informations
+	BroadcastingReceivingCooldown : number, -- Cooldown for listening the broadcast messages
+	BroadcastingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
 	ArchivationEnabled : boolean, -- If this UDataComponent's info allowed to use archivation, where the data will be moved to the archived data store after detaching
 	ArchivationSuffix : string, -- Suffixed to the DataStore name for the archived data,
 	MaxDataSavingPerTick : number, -- Maximum data saving per tick in FIFO queue,
@@ -319,7 +315,6 @@ export type __UDCInfo_Internal = {
 	_IsSaveRunning : boolean,
 	_IsObtainingRunning : boolean,
 	_IsCompressionTimerRunning : boolean,
-	_CacheCleaningCalled : boolean,
 	_StandbyReady : boolean,
 	_RecordBroadcastCalled : boolean,
 	_BroadcastQueueRunning : boolean,
@@ -343,18 +338,14 @@ export type __UDCInfo_Internal = {
 	DataWritingCooldown : number, -- Cooldown between each data write
 	MaxKeyLength : number, -- Maximum key-length for each keys
 	BackupEnabled : boolean, -- If this UDataComponent's info allowed to call backup data when fatal error occurs
-	DefaultBackupAttempts : number, --  Strictly gives some attempts to get the data-backup when normal load failed
-	DefaultBackupYieldDuration : number, -- Yield duration between each attempt of get the data-backup
 	StrictlyUnallowDetaching : boolean, -- If this UDataComponent's info unallowed to remove/archive current data
 	AutoSaveEnabled : boolean, -- If this UDataComponent's info allowed to auto-save data in background
 	AutoSaveInterval : number, -- Interval between each auto-save
 	WALDataSuffix : string, -- Suffixed to the DataStore name for the WAL
 	CanOwnershipExpired : boolean, -- If this UDataComponent's info allowed, the record can be expired when the expiration hits in
 	OwnershipExpiration : number, -- Duration for the data's ownership, where the player can holds the data and server claiming current data to other servers
-	SwappingEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
-	SwappingCooldown : number, -- Cooldown between each swap
-	CacheCleaningEnabled : boolean, -- If this UDataComponent's info allowed to clean up the cache
-	CacheCleaningInterval : number,-- Interval between each cache cleaning
+	TransactionEnabled : boolean, -- If this UDataComponent's info allowed to swap data between players
+	TransactionCooldown : number, -- Cooldown between each swap
 	DataBlueprint : {any?}, -- Blueprint for the data, where when a new player joins, the data will be filled with the blueprint as template or first data
 	ErrorReasonNamespace : string, -- Namespace for the error reasons
 	CompressionLevel : number, -- Compression level for the data, 1-22, default 10
@@ -362,13 +353,13 @@ export type __UDCInfo_Internal = {
 	CompressionQueueCooldown : number, -- Cooldown for the compression queue
 	MaxDecompressedSize  : number, -- Maximum size for the data to be compressed, in bytes
 	LocalDataNamespace : string, -- Namespace for the local record level
-	MessagingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
-	MessagingNamespace : string, -- Namespace for the Broadcast channel for each server
-	MessagingExpiration : number, -- Duration for the broadcast to expire
-	MessagingMaxPacketSize : number, -- Maximum size for the broadcast packet, in bytes
-	MessagingSendingCooldown : number, -- Cooldown for sending the broadcast informations
-	MessagingReceivingCooldown : number, -- Cooldown for listening the broadcast messages
-	MessagingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
+	BroadcastingEnabled : boolean, -- If this UDataComponent's info allowed to use messaging across servers, called Broadcasting
+	BroadcastingNamespace : string, -- Namespace for the Broadcast channel for each server
+	BroadcastingExpiration : number, -- Duration for the broadcast to expire
+	BroadcastingMaxPacketSize : number, -- Maximum size for the broadcast packet, in bytes
+	BroadcastingSendingCooldown : number, -- Cooldown for sending the broadcast informations
+	BroadcastingReceivingCooldown : number, -- Cooldown for listening the broadcast messages
+	BroadcastingLocalListeningCooldown : number, -- Cooldown for listening the local broadcast messages
 	ArchivationEnabled : boolean, -- If this UDataComponent's info allowed to use archivation, where the data will be moved to the archived data store after detaching
 	ArchivationSuffix : string, -- Suffixed to the DataStore name for the archived data,
 	MaxDataSavingPerTick : number, -- Maximum data saving per tick in FIFO queue,
@@ -1504,7 +1495,7 @@ local function run_broadcast_queue(meta : __UDCInfo_Internal)
 	RunService.Heartbeat:Connect(function() 
 		if not meta.Enabled or not UDataComponent.Enabled or meta._ShutdownCalled then return end
 
-		while #meta._BroadcastPendingQueue > 0 and can_send_broadcast(meta) and meta.MessagingEnabled and not meta._ShutdownCalled do
+		while #meta._BroadcastPendingQueue > 0 and can_send_broadcast(meta) and meta.BroadcastingEnabled and not meta._ShutdownCalled do
 			local item = table.remove(meta._BroadcastPendingQueue, 1)
 			if not item then continue end
 
@@ -1655,7 +1646,7 @@ end
 
 
 local function enqueue_broadcast(meta : __UDCInfo_Internal, record : UDCRecord, channel : string, packet : any, targetKey : string? | number?)
-	if not meta.MessagingEnabled then
+	if not meta.BroadcastingEnabled then
 		return
 	end
 
@@ -2000,11 +1991,11 @@ local function create_event_class(meta : __UDCInfo_Internal, record : UDCRecord)
 end
 
 local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal, recordName : string, globalName : string)
-	if not meta.MessagingEnabled or meta._RecordBroadcastCalled then return end
+	if not meta.BroadcastingEnabled or meta._RecordBroadcastCalled then return end
 	meta._RecordBroadcastCalled = true
 
-	local recordBroadcastName = meta.MessagingNamespace .. "-" .. recordName
-	local globalBroadcastName = meta.MessagingNamespace .. "-" .. globalName
+	local recordBroadcastName = meta.BroadcastingNamespace .. "-" .. recordName
+	local globalBroadcastName = meta.BroadcastingNamespace .. "-" .. globalName
 
 	local recordBrSuccess, recordBrErr = pcall(function()
 		return MessagingService:SubscribeAsync(recordBroadcastName, function(message)
@@ -2032,7 +2023,7 @@ local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal, record
 			local record = meta._ActiveRecords[target]		
 			if not record then return end
 
-			if workspace:GetServerTimeNow() - timestamp > meta.MessagingExpiration then 
+			if workspace:GetServerTimeNow() - timestamp > meta.BroadcastingExpiration then 
 				throw(meta, record, "Received broadcast packet is expired or invalid.")
 				return 
 			end
@@ -2080,7 +2071,7 @@ local function set_broadcast_record_subscriber(meta : __UDCInfo_Internal, record
 			local key = data.BroadcasterKey or 0
 			local ownerId = data.BroadcasterOwnerId or 0
 
-			if workspace:GetServerTimeNow() - timestamp > meta.MessagingExpiration then return end
+			if workspace:GetServerTimeNow() - timestamp > meta.BroadcastingExpiration then return end
 
 			local broadcasterData = data.BroadcasterData
 			if not broadcasterData then return end
@@ -2738,11 +2729,11 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	-- 2. Record Broadcasting -- this is where current record broadcasting to specific record from other server
 	-- 3. Local Broadcasting -- this is where current record broadcasting to other servers that listening to the same channel
 
-	local recordBroadcastName = meta.MessagingNamespace .. "-" .. recordBroadcastSuffix
-	local globalBroadcastName = meta.MessagingNamespace .. "-" .. globalBroadcastSuffix
+	local recordBroadcastName = meta.BroadcastingNamespace .. "-" .. recordBroadcastSuffix
+	local globalBroadcastName = meta.BroadcastingNamespace .. "-" .. globalBroadcastSuffix
 
 	function broadcasting:BroadcastCurrentData(OtherThings: any?)
-		if not meta.MessagingEnabled then
+		if not meta.BroadcastingEnabled then
 			throw(meta, record, "Messaging is disabled.")
 			return false
 		end
@@ -2779,7 +2770,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	end
 
 	function broadcasting:WaitForBroadcastPacket(Timeout: number?) : UDCBroadcastingPacket
-		if not meta.MessagingEnabled then
+		if not meta.BroadcastingEnabled then
 			throw(meta, record, "Messaging is disabled.")
 			return nil
 		end
@@ -2806,7 +2797,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 				if not success then return end
 
 				if data.BroadcasterServerId == ServerId then return end
-				if workspace:GetServerTimeNow() - data.BroadcastTime > meta.MessagingExpiration then return end
+				if workspace:GetServerTimeNow() - data.BroadcastTime > meta.BroadcastingExpiration then return end
 
 				local finishedData = deepclone(data)
 
@@ -2835,7 +2826,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	end
 
 	function broadcasting:SendLocalBroadcast(ChannelName: string, OtherThings: any?)
-		if not meta.MessagingEnabled then
+		if not meta.BroadcastingEnabled then
 			throw(meta, record, "Messaging is disabled.")
 			return false
 		end
@@ -2873,7 +2864,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	end
 
 	function broadcasting:ListenToLocalBroadcast(ChannelName: string, Listener: (BroadcastPacket: UDCBroadcastingPacket) -> any)
-		if not meta.MessagingEnabled then
+		if not meta.BroadcastingEnabled then
 			throw(meta, record, "Messaging is disabled.")
 			return nil
 		end
@@ -2905,7 +2896,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 				if not decompressedSuccess then return end
 
 				if data.BroadcasterServerId == ServerId then return end
-				if workspace:GetServerTimeNow() - data.BroadcastTime > meta.MessagingExpiration then return end
+				if workspace:GetServerTimeNow() - data.BroadcastTime > meta.BroadcastingExpiration then return end
 
 				local packet = deepfreeze({
 					BroadcasterKey = data.BroadcasterKey,
@@ -2928,7 +2919,7 @@ local function create_broadcasting_class(meta : __UDCInfo_Internal, record : UDC
 	end
 
 	function broadcasting:SendBroadcastToRecord(TargetKey: string | number, OtherThings: any?)
-		if not meta.MessagingEnabled then
+		if not meta.BroadcastingEnabled then
 			throw(meta, record, "Messaging is disabled.")
 			return false
 		end
@@ -3018,7 +3009,7 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 	end
 	
 	function utility:CreateTransaction(AnotherRecord: UDCRecord, TransactionFunction: (EditorPatch: UDCTransactionPatch) -> ())
-		if not meta.SwappingEnabled then
+		if not meta.TransactionEnabled then
 			throw(meta, record, "Swapping is disabled.")
 			return false
 		end
@@ -3029,7 +3020,7 @@ local function create_utility_class(meta : __UDCInfo_Internal, record : UDCRecor
 		end
 		
 		local now = workspace:GetServerTimeNow()
-		if (meta._SwapTimestamp[record.Key] and now - meta._SwapTimestamp[record.Key] < meta.SwappingCooldown) or (meta._SwapTimestamp[AnotherRecord.Key] and now - meta._SwapTimestamp[AnotherRecord.Key] < meta.SwappingCooldown) then
+		if (meta._SwapTimestamp[record.Key] and now - meta._SwapTimestamp[record.Key] < meta.TransactionCooldown) or (meta._SwapTimestamp[AnotherRecord.Key] and now - meta._SwapTimestamp[AnotherRecord.Key] < meta.TransactionCooldown) then
 			throw(meta, record, "Swapping is on cooldown.")
 			return false
 		end
@@ -4679,18 +4670,14 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.DataWritingCooldown = 3
 	self.MaxKeyLength = 50
 	self.BackupEnabled = true
-	self.DefaultBackupAttempts = 5
-	self.DefaultBackupYieldDuration = 3
 	self.StrictlyUnallowDetaching = true
 	self.AutoSaveEnabled = true
 	self.AutoSaveInterval = 300
 	self.WALDataSuffix = "_wal"
 	self.CanOwnershipExpired = true
 	self.OwnershipExpiration = 1 -- 1 Day
-	self.SwappingEnabled = true
-	self.SwappingCooldown = 5
-	self.CacheCleaningEnabled = true
-	self.CacheCleaningInterval = 300
+	self.TransactionEnabled = true
+	self.TransactionCooldown = 5
 	self.DataBlueprint = {}
 	self.ErrorReasonNamespace = "UDataComponent"
 	self.CompressionLevel = 10
@@ -4698,13 +4685,13 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self.CompressionQueueCooldown = 30
 	self.MaxDecompressedSize = 4194304 -- 4 MB - 1 Byte
 	self.LocalDataNamespace = "LUDataComponent"
-	self.MessagingEnabled = false
-	self.MessagingNamespace = "UDCBroadcast"
-	self.MessagingExpiration = 10 -- 10 seconds
-	self.MessagingMaxPacketSize = 900 -- 900 bytes
-	self.MessagingSendingCooldown = 5
-	self.MessagingReceivingCooldown = 5
-	self.MessagingLocalListeningCooldown = 5
+	self.BroadcastingEnabled = false
+	self.BroadcastingNamespace = "UDCBroadcast"
+	self.BroadcastingExpiration = 10 -- 10 seconds
+	self.BroadcastingMaxPacketSize = 900 -- 900 bytes
+	self.BroadcastingSendingCooldown = 5
+	self.BroadcastingReceivingCooldown = 5
+	self.BroadcastingLocalListeningCooldown = 5
 	self.ArchivationEnabled = true
 	self.ArchivationSuffix = "_archived"
 	self.MaxDataSavingPerTick = 4
@@ -4753,7 +4740,6 @@ function UDataComponent.InDataInfo(DataStoreName: string, Scope: string?, Config
 	self._IsSaveRunning = false
 	self._IsObtainingRunning = false
 	self._IsCompressionTimerRunning = false
-	self._CacheCleaningCalled = false
 	self._StandbyReady = false
 	self._AutosaveCalled = false
 	self._RecordBroadcastCalled = false
