@@ -911,7 +911,7 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 		entry = result
 	end
 
-	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	local thisOwnerId = record.Owner and record.Owner.UserId
 	local now = workspace:GetServerTimeNow()
 	local attempts = 0
 
@@ -930,8 +930,8 @@ local function load_data(meta : __UDCInfo_Internal, record : UDCRecord)
 					-- Checking if the server is still alive
 					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
 
-					local isDifferentOwner = thisOwnerId ~= id -- Checking if the owner is different
-					local isDifferentServer = serverid and serverid ~= ServerId and not isStale -- Checking if the server is different and not dead/stale
+					local isDifferentOwner = thisOwnerId and thisOwnerId ~= id -- Checking if the owner is different
+					local isDifferentServer = thisOwnerId and serverid and serverid ~= ServerId and not isStale -- Checking if the server is different and not dead/stale
 
 					-- If the data is owned by a different player or a different server, return nil to force an invalid result
 					if isDifferentOwner or isDifferentServer then
@@ -977,7 +977,7 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 	record.CurrentState = "Running"
 
 	local now = workspace:GetServerTimeNow()
-	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	local thisOwnerId = record.Owner and record.Owner.UserId
 
 	local dataCache = meta._DataCache[record.Key]
 	if not dataCache then 
@@ -1044,13 +1044,13 @@ local function save_data(meta : __UDCInfo_Internal, record : UDCRecord)
 
 					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
 
-					local isDifferentOwner = thisOwnerId ~= id			
-					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+					local isDifferentOwner = thisOwnerId and thisOwnerId ~= id			
+					local isDifferentServer = thisOwnerId and serverid and serverid ~= ServerId and not isStale
 
 					local isCacheStale = now - (dataCache.__bounds and dataCache.__bounds.since or 0) > meta.StaleServerClaimingTime
 
-					local isServerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.serverid and dataCache.__bounds.serverid ~= serverid and not isCacheStale
-					local isOwnerNotSameAsCache = dataCache.__bounds and dataCache.__bounds.id and dataCache.__bounds.id ~= id
+					local isServerNotSameAsCache = thisOwnerId and dataCache.__bounds and dataCache.__bounds.serverid and dataCache.__bounds.serverid ~= serverid and not isCacheStale
+					local isOwnerNotSameAsCache = thisOwnerId and dataCache.__bounds and dataCache.__bounds.id and dataCache.__bounds.id ~= id
 
 					-- If the data from cache is owned by a different player or a different server, return nil to force an invalid result
 					if isServerNotSameAsCache or isOwnerNotSameAsCache then
@@ -1101,7 +1101,7 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 	clonedRecord.__version = (clonedRecord.__version or 0) + 1
 
 	local data = deepclone(clonedRecord.__data)
-	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	local thisOwnerId = record.Owner and record.Owner.UserId
 
 	local compressed, flag
 	local found = false
@@ -1143,11 +1143,11 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
 					local isCacheStale = now - (clonedRecord.__bounds and clonedRecord.__bounds.lastheartbeat or 0) > meta.StaleServerClaimingTime
 
-					local isServerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.serverid and clonedRecord.__bounds.serverid ~= serverid and clonedRecord.__bounds.serverid ~= ServerId and not isCacheStale
-					local isOwnerNotSameAsCache = clonedRecord.__bounds and clonedRecord.__bounds.id and clonedRecord.__bounds.id ~= id and clonedRecord.__bounds.id ~= thisOwnerId
+					local isServerNotSameAsCache = thisOwnerId and clonedRecord.__bounds and clonedRecord.__bounds.serverid and clonedRecord.__bounds.serverid ~= serverid and clonedRecord.__bounds.serverid ~= ServerId and not isCacheStale
+					local isOwnerNotSameAsCache = thisOwnerId and clonedRecord.__bounds and clonedRecord.__bounds.id and clonedRecord.__bounds.id ~= id and clonedRecord.__bounds.id ~= thisOwnerId
 
-					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
-					local isDifferentOwner = id and id ~= thisOwnerId
+					local isDifferentServer = thisOwnerId and serverid and serverid ~= ServerId and not isStale
+					local isDifferentOwner = thisOwnerId and id and id ~= thisOwnerId
 
 					if isServerNotSameAsCache or isOwnerNotSameAsCache then
 						return nil
@@ -1211,7 +1211,7 @@ local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
 		return nil
 	end
 
-	local thisOwnerId = record.Owner and record.Owner.UserId or 0
+	local thisOwnerId = record.Owner and record.Owner.UserId
 	local now = workspace:GetServerTimeNow()
 
 	local success, result = pcall(function()
@@ -1239,8 +1239,8 @@ local function fallback_backup(meta : __UDCInfo_Internal, record : UDCRecord)
 
 					local isStale = now - lastHeartbeat > meta.StaleServerClaimingTime
 
-					local isDifferentOwner = thisOwnerId ~= id
-					local isDifferentServer = serverid and serverid ~= ServerId and not isStale
+					local isDifferentOwner = thisOwnerId and thisOwnerId ~= id
+					local isDifferentServer = thisOwnerId and serverid and serverid ~= ServerId and not isStale
 
 					if isDifferentOwner or isDifferentServer then
 						return nil
@@ -3433,7 +3433,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 
 		-- Checking if the data is owned by this server
-		if unready.__bounds.serverid ~= ServerId then
+		if record.Owner and unready.__bounds.serverid ~= ServerId then
 			penalty("This record is not being owned by this server, unable to get ready.")
 			return false
 		end
@@ -3446,7 +3446,7 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 
 		-- Checking if the data is still bound to this player
 		local timeout = 60 * 60 * 24 * (meta.OwnershipExpiration or 1)
-		if meta.CanOwnershipExpired and now - unready.__bounds.since > timeout then
+		if record.Owner and meta.CanOwnershipExpired and now - unready.__bounds.since > timeout then
 			penalty("Record binding is already expired for this owner, you should refresh the ownership expiration of this record.")
 			dispatch(meta, record, "OnOwnershipExpired")
 			return false
