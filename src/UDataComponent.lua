@@ -413,6 +413,10 @@ export type UDCRecord = {
 	Write: (UDCRecord: UDCRecord, WritingFunction: (CurrentData: any) -> ()) -> boolean, -- (Suspending) this is how you can save the data with partial update, where you don't need to commit all data to write when you just need one or two or more datas to edit
 	-- @param WritingFunction: (CurrentData: any) -> () -- Function that used as Write session over the data
 	-- @return boolean -- Status of the writing data, true if success, but true in here isn't meaning the data is actually commited
+	
+	Patch: (UDCRecord: UDCRecord, WritingFunction: (CurrentData: any) -> ()) -> boolean, -- Mutate the data immediately inside of the record, without explicitly commit the data, but will be commited when released by Standby or Autosave, or accidently by a queue that has been processed by UDC
+	-- @param WritingFunction: (CurrentData: any) -> () -- Function that used as Write session over the data
+	-- @return boolean -- Status of the writing data, true if success, but true in here isn't meaning the data is actually commited
 
 	ForceSave: (UDCRecord: UDCRecord, Data: any, SegmentIndex: number?) -> boolean, -- (Suspending) same as record:Save(...), but this will commit into datastore immediately
 	-- @param Data: any -- Data to commit
@@ -4001,6 +4005,71 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 		end
 
 		return false
+	end
+	
+	-- mutate the data of record without any intention to commit the record into DataStore after patch
+	-- best choice when you're trying to write the record in repetitive time that has no time to pause or rest
+	-- the record will be committed automaticaly by Autosave or Standby automatic save
+	function record:Patch(WritingFunction: (CurrentData: any) -> ())
+		if not meta.Enabled or not UDataComponent.Enabled then
+			throw(meta, record, "UDataComponent is not enabled")
+			return false
+		end
+
+		if record._SleepProgress then
+			throw(meta, record, "This record is in sleep progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record._ReadyProgress then
+			throw(meta, record, "This record is in ready progress, unable to override current record's state process.")
+			return false
+		end
+
+		if record.CurrentState ~= "Ready" then
+			throw(meta, record, "This record is currently not ready or prepared to do Patch() operations. Please call Ready()")
+			return false
+		end
+
+		local data = meta._DataCache[record.Key]
+		if not data or not data.__data then
+			throw(meta, record, "Data of this record is not loaded yet.")
+			return false
+		end
+
+		local success
+		local customData = deepclone(data.__data)
+		meta._LockSessions:Do(record.Key, function()
+			success = pcall(WritingFunction, customData)
+			if not success then return end
+
+			if not are_schemas_valid(meta, record, customData) then
+				success = false
+				return
+			end
+
+			clamp_values(meta, record, customData)
+
+			if not are_datas_valid(meta, record, customData) then
+				success = false
+				return
+			end
+
+			data.__data = customData
+			record.Data = deepfreeze(customData)
+
+			meta._DirtySave[record.Key] = true
+		end)
+
+		if not success then
+			throw(meta, record, "Something error happened when patching data.")
+			return false
+		end
+
+		push_compression_timer(meta, record)
+		dispatch(meta, record, "OnWrite")
+
+		return true
 	end
 
 	-- Same as Save() but the data is commiting explicitly into datastore
