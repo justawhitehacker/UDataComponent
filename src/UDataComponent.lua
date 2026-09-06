@@ -1390,10 +1390,8 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 				
 				if success then
 					table.remove(meta._StandbyRegistry, i)
-					print("success and released")
 				else
 					throw(meta, info.Record, "Standby failed to save and release when the player is leaving, will retry via server shutdown.")	
-					print("tai")
 				end
 				
 				break
@@ -1439,7 +1437,6 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 					task.spawn(function()
 						pcall(write_to_wal_or_fs, meta, item.Record, now)
 						working.Workers -= 1
-						print("success and released with dirty flag")
 					end)
 				end
 
@@ -1449,7 +1446,6 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 					task.spawn(function()
 						pcall(normal.Record.Sleep, normal.Record)
 						working.Workers -= 1
-						print("success and released with normal flag")
 					end)
 				end
 			end
