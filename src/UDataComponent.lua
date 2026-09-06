@@ -1373,7 +1373,7 @@ local function run_compression_timer(meta : __UDCInfo_Internal)
 end
 
 local function set_standby_place(meta : __UDCInfo_Internal)
-	if meta._StandbyReady or meta._ShutdownCalled then return end
+	if meta._StandbyReady then return end
 	meta._StandbyReady = true
 
 	Players.PlayerRemoving:Connect(function(Player)
@@ -1393,6 +1393,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 					print("success and released")
 				else
 					throw(meta, info.Record, "Standby failed to save and release when the player is leaving, will retry via server shutdown.")	
+					print("tai")
 				end
 				
 				break
@@ -1453,6 +1454,13 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 				end
 			end
 
+			task.wait()
+		end
+		
+		while working.Workers > 0 do
+			if workspace:GetServerTimeNow() - now > meta.ShutdownSecondsToken then
+				break
+			end
 			task.wait()
 		end
 	end)
