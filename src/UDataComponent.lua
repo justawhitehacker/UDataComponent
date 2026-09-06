@@ -1379,8 +1379,14 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 			local sameOwner = info.Record and info.Record.Owner and info.Record.Owner.UserId == userId
 
 			if sameOwner then
-				write_to_wal_or_fs(meta, info.Record, now)				
-				table.remove(meta._StandbyRegistry, i)
+				local success = write_to_wal_or_fs(meta, info.Record, now)				
+				
+				if success then
+					table.remove(meta._StandbyRegistry, i)
+				else
+					throw(meta, info.Record, "Standby failed to save when the player is leaving, will retry via autosave or server shutdown.")	
+				end
+				
 				break
 			end
 		end
@@ -4215,9 +4221,13 @@ local function current_record(meta : __UDCInfo_Internal, key : number | string, 
 					if clonedRecord.__version and CurrentData and clonedRecord.__version > (CurrentData.__version or 0) then
 						CurrentData = clonedRecord
 					end
+					
+					-- making sure if the heartbeat of this server still active when saving normally
+					if CurrentData.__bounds and CurrentData.__bounds.lastheartbeat then
+						CurrentData.__bounds.lastheartbeat = now
+					end
 
 					CurrentData.__data = compressed
-					CurrentData.__bounds.lastheartbeat = now
 					CurrentData.__bounds.since = now
 					return CurrentData
 				end)
