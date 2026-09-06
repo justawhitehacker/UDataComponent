@@ -1187,14 +1187,21 @@ local function write_to_wal_or_fs(meta : __UDCInfo_Internal, record : UDCRecord,
 		if index then
 			table.remove(meta._SavePendingQueue, index)
 		end
-
+		
+		local sleptOk = false
 		if isForcedSaveSuccess and saveResult then
 			pcall(function() meta._CurrentWALDataStore:RemoveAsync(record.Key) end)
-			pcall(record.Sleep, record)
+			local success, finallySleep = pcall(record.Sleep, record)
+			sleptOk = success and finallySleep
 		end
-
-		dispatch(meta, record, "OnSaved")
-		record.CurrentState = "Asleep"
+		
+		if sleptOk then
+			dispatch(meta, record, "OnSaved")
+		else
+			throw(meta, record, "Unable to release this record after player leaving, the session still belong this server")
+		end
+		
+		xresult = isForcedSaveSuccess and saveResult and sleptOk
 	end
 
 	return xresult
@@ -1383,8 +1390,9 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 				
 				if success then
 					table.remove(meta._StandbyRegistry, i)
+					print("success and released")
 				else
-					throw(meta, info.Record, "Standby failed to save when the player is leaving, will retry via autosave or server shutdown.")	
+					throw(meta, info.Record, "Standby failed to save and release when the player is leaving, will retry via server shutdown.")	
 				end
 				
 				break
@@ -1394,7 +1402,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 
 	game:BindToClose(function()
 		meta._ShutdownCalled = true
-
+		
 		local dirty = {}
 		local normals = {}
 		for _, info in ipairs(meta._StandbyRegistry) do
@@ -1408,7 +1416,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 			end
 		end
 		meta._StandbyRegistry = {}
-
+		
 		local working = { Workers = 0 }
 
 		local now = workspace:GetServerTimeNow()
@@ -1430,6 +1438,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 					task.spawn(function()
 						pcall(write_to_wal_or_fs, meta, item.Record, now)
 						working.Workers -= 1
+						print("success and released with dirty flag")
 					end)
 				end
 
@@ -1439,6 +1448,7 @@ local function set_standby_place(meta : __UDCInfo_Internal)
 					task.spawn(function()
 						pcall(normal.Record.Sleep, normal.Record)
 						working.Workers -= 1
+						print("success and released with normal flag")
 					end)
 				end
 			end
