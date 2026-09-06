@@ -1,7 +1,7 @@
 {
   {
     "name": "UDataComponent",
-    "version": "UDataComponent-v1.0",
+    "version": "UDataComponent-v2.0",
     "description": "UDataComponent is a DataStore-module wrapper that prioritizing speed and security at once, derived from legacy, DataDeter. Where you can handle player's data in high-level or use it in low-level without leaving the module environtment. UDataComponent guarantees anti data-loss with WAL or Backup, also helping you with built-in security tools.",
     "private": false,
     "main": "UDataComponent.lua",
